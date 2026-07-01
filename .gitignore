@@ -1,0 +1,8 @@
+# Generated build artifacts and vendored deps extracted by server/build-server.sh
+/build/
+
+# Upstream reference repos (their own git clones: Wolf, gst-wayland-display)
+/reference/
+
+# Local-only build notes / status docs
+/docs/
