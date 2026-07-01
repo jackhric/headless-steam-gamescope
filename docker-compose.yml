@@ -28,7 +28,7 @@ services:
       NVIDIA_DRIVER_CAPABILITIES: all
       STEAM_STREAM_RENDER_NODE: /dev/dri/renderD129
       WOLF_RENDER_NODE: /dev/dri/renderD129
-      WOLF_USE_ZERO_COPY: "FALSE"
+      WOLF_USE_ZERO_COPY: "TRUE"
       # STEAM_STREAM_LOG_LEVEL: INFO   # set DEBUG for the first live pairing/launch run
 
     # `retro` (uid 1000) must be in the host gids that own the DRI nodes to open them.
