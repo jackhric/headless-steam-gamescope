@@ -60,6 +60,10 @@ int main() {
     auto avail = encoder_config::available_encoders(encoder_config::load_or_seed());
     logs::log(logs::info, "[ENCODER-CFG] config={} available: h264={} hevc={} av1={}", cfg_path,
               avail.h264, avail.hevc, avail.av1);
+    // Advertise HEVC/AV1 to the client only if this box can actually encode them; otherwise the
+    // client's ANNOUNCE falls back to H264 (bitStreamFormat=0) even when HEVC is selected.
+    state.support_hevc = avail.hevc;
+    state.support_av1 = avail.av1;
   }
 
   if (!control::ControlServer::global_init())
