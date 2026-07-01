@@ -58,6 +58,12 @@ struct UDPSink {
     ::sendto(fd, data, size, 0, (sockaddr *)&dest, sizeof(dest));
   }
 
+  // One-shot: the first buffer signals the pipeline is flowing (also the marker verify-media.sh asserts on).
+  void note_first(std::uint64_t n) {
+    if (n == 1)
+      logs::log(logs::info, "[MEDIA] {} appsink produced first RTP buffer{}", label,
+                have_client.load() ? " (sending to client)" : " (no client yet, dropping)");
+  }
 };
 
 namespace {
@@ -76,7 +82,7 @@ GstFlowReturn on_new_sample(GstAppSink *appsink, gpointer user_data) {
       if (gst_buffer_map(buf, &map, GST_MAP_READ)) {
         sink->send(map.data, map.size);
         gst_buffer_unmap(buf, &map);
-        ++(*sink->counter);
+        sink->note_first(++(*sink->counter));
       }
     }
   } else if (GstBuffer *buf = gst_sample_get_buffer(sample)) {
@@ -84,7 +90,7 @@ GstFlowReturn on_new_sample(GstAppSink *appsink, gpointer user_data) {
     if (gst_buffer_map(buf, &map, GST_MAP_READ)) {
       sink->send(map.data, map.size);
       gst_buffer_unmap(buf, &map);
-      ++(*sink->counter);
+      sink->note_first(++(*sink->counter));
     }
   }
   gst_sample_unref(sample);
