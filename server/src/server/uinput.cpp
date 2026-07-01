@@ -259,10 +259,19 @@ std::unique_ptr<VirtualGamepad> VirtualGamepad::create() {
     ::close(fd);
     return nullptr;
   }
-  return std::unique_ptr<VirtualGamepad>(new VirtualGamepad(fd));
+  auto pad = std::unique_ptr<VirtualGamepad>(new VirtualGamepad(fd));
+  // Announce the pad to SDL/Steam: no udevd runs here, so hotplug + joystick classification only
+  // work if we inject the netlink uevent and hwdb entry ourselves (see fake_udev).
+  if (fake_udev::device_from_uinput_fd(fd, pad->udev_dev_)) {
+    fake_udev::plug(pad->udev_dev_);
+    pad->udev_plugged_ = true;
+  }
+  return pad;
 }
 
 VirtualGamepad::~VirtualGamepad() {
+  if (udev_plugged_)
+    fake_udev::unplug(udev_dev_);
   if (fd_ >= 0) {
     ioctl(fd_, UI_DEV_DESTROY);
     ::close(fd_);

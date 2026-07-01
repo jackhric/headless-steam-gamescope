@@ -1,8 +1,4 @@
-# steam-stream — single-container Moonlight host (our own server, not the Wolf binary).
-#
-# IMPORTANT: this binds the host Moonlight ports (47984/47989/48010/47999 + RTP 48100/48200) via
-# host networking. Production Wolf at /opt/wolf owns those ports. STOP Wolf before `up` and
-# restore it after — see the LIVE PHONE-TEST RUNBOOK in BUILD-M6.md.
+# steam-stream: single-container Moonlight host
 services:
   steam-stream:
     image: local/steam-stream:latest
@@ -11,8 +7,6 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-
-    # Moonlight needs the well-known ports reachable on the LAN with no NAT/port juggling.
     network_mode: host
 
     # --- NVIDIA GPU via CDI ---------------------------------------------------------------
@@ -23,35 +17,21 @@ services:
       - /dev/uinput:/dev/uinput
       - /dev/dri:/dev/dri
 
+    device_cgroup_rules:
+      - "c 13:* rmw"
+
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
       STEAM_STREAM_RENDER_NODE: /dev/dri/renderD129
       WOLF_RENDER_NODE: /dev/dri/renderD129
       WOLF_USE_ZERO_COPY: "TRUE"
-      # Encoder config lives on the HOST (bind-mounted below), not in the container, so it's
-      # editable in place (and by a future web UI). Written from defaults on first run.
       STEAM_STREAM_ENCODER_CONFIG: /config/encoders.toml
-      # STEAM_STREAM_LOG_LEVEL: INFO   # set DEBUG for the first live pairing/launch run
-
-    # `retro` (uid 1000) must be in the host gids that own the DRI nodes to open them.
-    # Host: render=989 (renderD12x), video=985 (cardN), input=994 (/dev/uinput). Adjust to
-    # match `getent group render video input` on the target box.
     group_add:
       - "989"   # render  -> /dev/dri/renderD128,129
       - "985"   # video   -> /dev/dri/card*
       - "994"   # input   -> /dev/uinput, /dev/input/event*
-
-    # Steam / Proton / gamescope want plenty of shared memory.
     shm_size: "2gb"
-
-    # Steam's runtime (pressure-vessel / bwrap) creates an unprivileged USER NAMESPACE to
-    # sandbox steamwebhelper + games. Docker's default seccomp/apparmor profiles block that
-    # nested clone(CLONE_NEWUSER), so bwrap fails with "No permissions to creating new
-    # namespace" and Steam aborts with "Steam now requires user namespaces to be enabled" --
-    # steamwebhelper never starts and Big Picture never renders. These mirror Wolf's own Steam
-    # app container (reference/wolf .../state/default/config.v3.toml -> WolfSteam) and are what
-    # let Steam run under Wolf/GOW.
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
@@ -70,22 +50,12 @@ services:
         hard: 10240
 
     volumes:
-      # One shared Steam login/library + server pairing state, persisted across restarts.
-      - retro_home:/home/retro
+      # Shared Steam login/library + server pairing state, persisted on the host so it's
+      # inspectable/backup-able in place (not buried in a Docker named volume).
+      - /opt/steam-stream/home:/home/retro
       # Encoder config on the host, editable in place (seeded on first run if absent).
       - ./config:/config
+      - /dev/input:/dev/input
       # Game + ROM libraries (read-write so Steam can install; make :ro if you only stream installed games).
       - /mnt/games:/mnt/games
       - /mnt/nas_roms:/mnt/nas_roms
-
-      # --- OPTIONAL: seed /home/retro from the existing Wolf Steam profile (carry over the
-      #     user's Steam login + installed library). DO NOT enable this together with the named
-      #     `retro_home` volume above — pick ONE of:
-      #       (a) one-time copy into the named volume (recommended) — see the migration note in
-      #           BUILD-M6.md; leave this block commented, then `docker compose up`; OR
-      #       (b) bind the existing profile directly (read-only source, so the container can't
-      #           corrupt the Wolf profile — note Steam will be unable to write, prefer (a)):
-      # - /etc/wolf/container/Steam:/home/retro:ro
-
-volumes:
-  retro_home:

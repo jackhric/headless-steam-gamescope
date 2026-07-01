@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <server/fake_udev.hpp>
 #include <string>
 
 namespace input {
@@ -63,6 +64,8 @@ public:
 private:
   explicit VirtualGamepad(int fd) : fd_(fd) {}
   int fd_ = -1;
+  fake_udev::Device udev_dev_;
+  bool udev_plugged_ = false;
 };
 
 } // namespace input

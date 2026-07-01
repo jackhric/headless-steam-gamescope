@@ -32,6 +32,7 @@ enum INPUT_TYPE : int {
   MOUSE_SCROLL = boost::endian::native_to_little(0x0000000A),
   MOUSE_HSCROLL = boost::endian::native_to_little(0x55000001),
   CONTROLLER_MULTI = boost::endian::native_to_little(0x0000000C),
+  CONTROLLER_ARRIVAL = boost::endian::native_to_little(0x55000004),
 };
 
 enum KEYBOARD_MODIFIERS : char { NONE = 0x00, SHIFT = 0x01, CTRL = 0x02, ALT = 0x04, META = 0x08 };

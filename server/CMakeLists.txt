@@ -122,6 +122,7 @@ if(BUILD_SERVER)
             ${SRC}/server/launcher.cpp
             ${SRC}/server/control.cpp
             ${SRC}/server/uinput.cpp
+            ${SRC}/server/fake_udev.cpp
             ${SERVER_PROTO})
 
     target_include_directories(steam-stream-server PRIVATE
@@ -211,7 +212,8 @@ if(BUILD_SERVER)
             Boost::thread Boost::system Threads::Threads)
 
     # -- M4: uinput device-creation smoke test (needs --device /dev/uinput at runtime). --
-    add_executable(test_uinput ${TESTS}/integration/test_uinput.cpp ${SRC}/server/uinput.cpp)
+    add_executable(test_uinput ${TESTS}/integration/test_uinput.cpp ${SRC}/server/uinput.cpp
+            ${SRC}/server/fake_udev.cpp)
     target_include_directories(test_uinput PRIVATE ${SRC})
     target_compile_definitions(test_uinput PRIVATE FMT_HEADER_ONLY=1 BOOST_LOG_DYN_LINK=1)
     target_link_libraries(test_uinput PRIVATE

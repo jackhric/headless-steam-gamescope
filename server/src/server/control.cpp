@@ -86,6 +86,17 @@ void handle_input(ClientDevices &dev, const INPUT_PKT *pkt,
       mm->keyboard_key((unsigned int)linux_key, pkt->type == KEY_PRESS);
     break;
   }
+  case CONTROLLER_ARRIVAL: {
+    // Modern Moonlight announces the pad with CONTROLLER_ARRIVAL before sending state. Create the
+    // virtual device now so it (and its fake-udev hotplug event) exists before the game enumerates
+    // controllers -- otherwise Steam, which scanned at launch, never notices the later pad.
+    if (!dev.gamepad) {
+      dev.gamepad = input::VirtualGamepad::create();
+      logs::log(logs::info, "[ENET] CONTROLLER_ARRIVAL -> virtual gamepad {}",
+                dev.gamepad ? "created" : "FAILED");
+    }
+    break;
+  }
   case CONTROLLER_MULTI: {
     auto p = (const CONTROLLER_MULTI_PACKET *)pkt;
     if (!dev.gamepad)

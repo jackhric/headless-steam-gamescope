@@ -49,6 +49,12 @@ rm -f /tmp/.X11-unix/X* 2>/dev/null || true
 mkdir -p "${HOME}/.steam-stream"
 chown "${PUID}:${PGID}" "${HOME}/.steam-stream"
 
+# No udevd runs in-container, so the server injects fake-udev hotplug events + hwdb entries for its
+# virtual gamepad (see fake_udev.cpp). SDL/Steam (uid retro) read /run/udev/data to classify the
+# pad; the server (root) writes it. World-rwx so both sides work regardless of uid.
+mkdir -p /run/udev/data
+chmod -R 0777 /run/udev
+
 # PULSE_SERVER must be unset while the daemon starts (it refuses to autospawn otherwise);
 # exported only once the daemon is up.
 PULSE_SOCK="unix:${XDG_RUNTIME_DIR}/pulse/native"
