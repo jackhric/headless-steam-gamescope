@@ -29,6 +29,9 @@ services:
       STEAM_STREAM_RENDER_NODE: /dev/dri/renderD129
       WOLF_RENDER_NODE: /dev/dri/renderD129
       WOLF_USE_ZERO_COPY: "TRUE"
+      # Encoder config lives on the HOST (bind-mounted below), not in the container, so it's
+      # editable in place (and by a future web UI). Written from defaults on first run.
+      STEAM_STREAM_ENCODER_CONFIG: /config/encoders.toml
       # STEAM_STREAM_LOG_LEVEL: INFO   # set DEBUG for the first live pairing/launch run
 
     # `retro` (uid 1000) must be in the host gids that own the DRI nodes to open them.
@@ -69,6 +72,8 @@ services:
     volumes:
       # One shared Steam login/library + server pairing state, persisted across restarts.
       - retro_home:/home/retro
+      # Encoder config on the host, editable in place (seeded on first run if absent).
+      - ./config:/config
       # Game + ROM libraries (read-write so Steam can install; make :ro if you only stream installed games).
       - /mnt/games:/mnt/games
       - /mnt/nas_roms:/mnt/nas_roms

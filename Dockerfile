@@ -10,14 +10,39 @@
 # Big Picture / sway Desktop) as user `retro` into the session's gst-wayland-display compositor.
 # Single shared /home/retro -> one Steam login/library, two tiles.
 #
+# ============================================================================================
+# STAGE 1 (builder): compile steam-stream-server + the rtpmoonlightpay plugin.
+#
+# The builder is Ubuntu 24.04 (Wolf's toolchain image) so we link against Wolf's exact
+# GStreamer 1.26 ABI; the runtime base below is 25.04. That distro mismatch is why the final
+# stage copies the Boost 1.83 runtime libs out of here. Simple-Web-Server is pre-cloned in the
+# builder image (server/Dockerfile); peglib.h + enet-src are vendored in the repo build/ dir
+# (extracted offline by server/build-server.sh) and copied in from the build context.
+# ============================================================================================
+FROM steam-stream-builder:m1 AS builder
+
+COPY server /src/server
+COPY build/peglib /deps/peglib
+COPY build/enet /deps/enet
+
+# SIMPLE_WEB_SERVER_DIR is set in the builder image ENV (/opt/Simple-Web-Server).
+RUN cmake -S /src/server -B /tmp/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SERVER=ON \
+        -DSIMPLE_WEB_SERVER_DIR="$SIMPLE_WEB_SERVER_DIR" \
+        -DPEGLIB_DIR=/deps/peglib -DENET_DIR=/deps/enet \
+ && cmake --build /tmp/build -j"$(nproc)" \
+        --target steam-stream-server gstrtpmoonlight
+
+# ============================================================================================
+# STAGE 2 (runtime): the final single-container Moonlight host.
 # Base + both grafted stacks are Ubuntu 25.04, so apt/lib versions line up.
+# ============================================================================================
 FROM local/steam-stream:dev
 
 # ---- Boost 1.83 runtime --------------------------------------------------------------------
-# steam-stream-server + libgstrtpmoonlightpay.so were built on the 24.04 builder
-# (steam-stream-builder:m1) and link Boost soname 1.83; the 25.04 base ships 1.88. Copy the
-# 1.83 runtime libs in (matches server/tests/m5-verify.Dockerfile).
-COPY --from=steam-stream-builder:m1 \
+# steam-stream-server + libgstrtpmoonlightpay.so are built on the 24.04 builder stage and link
+# Boost soname 1.83; the 25.04 base ships 1.88. Copy the 1.83 runtime libs in.
+COPY --from=builder \
      /usr/lib/x86_64-linux-gnu/libboost_*.so.1.83.0 \
      /usr/lib/x86_64-linux-gnu/
 
@@ -31,11 +56,22 @@ RUN apt-get update -qq \
  && rm -rf /var/lib/apt/lists/*
 
 # ---- Our server binary + the M1 rtpmoonlightpay plugin -------------------------------------
-COPY build/server/steam-stream-server /usr/local/bin/steam-stream-server
+COPY --from=builder /tmp/build/steam-stream-server /usr/local/bin/steam-stream-server
 # Drop the payloader into Wolf's GStreamer plugin dir so it is on the default scan path
 # alongside waylanddisplaysrc / cudaupload / nvh264enc.
-COPY build/plugins/libgstrtpmoonlightpay.so \
+COPY --from=builder /tmp/build/libgstrtpmoonlightpay.so \
      /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/
+
+# ---- prune unused GStreamer plugins with unmet lib deps ------------------------------------
+# These optional leaf plugins (barcode/QR/HDR-image + the legacy vaapi plugin; we use the new
+# `va` plugin, libgstva.so, instead) are missing their runtime libs, so GStreamer logs a
+# blacklist WARNING for each on every plugin scan. None are in our capture/encode pipeline, so
+# remove them to keep the registry scan clean.
+RUN rm -f \
+      /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstopenexr.so \
+      /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstzbar.so \
+      /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstzxing.so \
+      /usr/local/lib/x86_64-linux-gnu/gstreamer-1.0/libgstvaapi.so
 
 # ---- NVIDIA ld path (REQUIRED) -------------------------------------------------------------
 # The NVIDIA Container Toolkit / CDI injects the driver userspace (incl. libnvrtc) under
@@ -50,13 +86,17 @@ RUN printf '/usr/local/nvidia/lib\n/usr/local/nvidia/lib64\n' \
 
 # ---- runtime env ---------------------------------------------------------------------------
 ENV GST_PLUGIN_PATH=/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0 \
-    # Non-zero-copy RGBx capture path; the CUDAMemory zero-copy path panics under CDI.
-    WOLF_USE_ZERO_COPY=FALSE \
+    # True zero-copy: waylanddisplaysrc emits memory:CUDAMemory directly (verified working under
+    # CDI on this box). Set FALSE to fall back to the RGBx + cudaupload path.
+    WOLF_USE_ZERO_COPY=TRUE \
     WOLF_RENDER_NODE=/dev/dri/renderD129 \
     STEAM_STREAM_RENDER_NODE=/dev/dri/renderD129 \
     LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
     # Persist pairing/cert/session state on the /home/retro volume so pairings survive restarts.
     STEAM_STREAM_STATE_DIR=/home/retro/.steam-stream \
+    # Encoder config on a dedicated /config mount (bind a host dir here) -- kept OUT of the
+    # container/state volume so it's editable on the host and by a future web UI.
+    STEAM_STREAM_ENCODER_CONFIG=/config/encoders.toml \
     # Add the DRI card + render nodes to GOW's device-group setup so `retro` can open them
     # (cont-init 15-setup_devices -> ensure-groups). Card-node access lets gamescope's XWayland
     # use glamor instead of falling back to software.
