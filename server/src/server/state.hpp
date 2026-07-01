@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crypto/crypto.hpp>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -58,6 +59,10 @@ public:
 
   // shared_ptr keeps AppState movable (SessionRegistry holds a non-movable mutex).
   std::shared_ptr<session::SessionRegistry> sessions = std::make_shared<session::SessionRegistry>();
+
+  // Installed by main.cpp; lets /cancel tear down the live session (registry removal alone
+  // leaves the app + pipelines orphaned).
+  std::function<void(std::size_t session_id)> stop_session;
 
   // Load (or generate + persist) server cert/key, uuid, paired clients from state_dir.
   static AppState init(const std::string &state_dir);

@@ -96,6 +96,13 @@ if(BUILD_SERVER)
     # fork (vendored offline, like the deps above) for the control channel.
     pkg_check_modules(GSTAPP REQUIRED IMPORTED_TARGET gstreamer-app-1.0)
 
+    # toml++ for the encoder config, used header-only: we take just its include dir (not the
+    # tomlplusplus::tomlplusplus link target, which would pull in libtomlplusplus.so.3 -- absent
+    # in the 25.04 runtime base since the build stage is 24.04).
+    find_package(tomlplusplus CONFIG REQUIRED)
+    get_target_property(TOMLPLUSPLUS_INCLUDE_DIRS
+            tomlplusplus::tomlplusplus INTERFACE_INCLUDE_DIRECTORIES)
+
     set(ENET_DIR "$ENV{ENET_DIR}" CACHE PATH "Moonlight ENet fork source dir (enet-src)")
     if(NOT ENET_DIR)
         message(FATAL_ERROR "Set ENET_DIR to the extracted enet-src checkout")
@@ -111,6 +118,7 @@ if(BUILD_SERVER)
             ${SRC}/server/https_server.cpp
             ${SRC}/server/rtsp_server.cpp
             ${SRC}/server/media.cpp
+            ${SRC}/server/encoder_config.cpp
             ${SRC}/server/launcher.cpp
             ${SRC}/server/control.cpp
             ${SRC}/server/uinput.cpp
@@ -121,7 +129,8 @@ if(BUILD_SERVER)
             ${MP}                       # <rtsp/parser.hpp>
             ${MP}/crypto                # <crypto/...>
             ${SIMPLE_WEB_SERVER_DIR}    # <server_http.hpp>
-            ${PEGLIB_DIR})              # <peglib.h>
+            ${PEGLIB_DIR}               # <peglib.h>
+            ${TOMLPLUSPLUS_INCLUDE_DIRS}) # <toml++/toml.hpp> (header-only)
 
     target_compile_definitions(steam-stream-server PRIVATE FMT_HEADER_ONLY=1 BOOST_LOG_DYN_LINK=1)
 

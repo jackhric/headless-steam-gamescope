@@ -1,0 +1,64 @@
+# steam-stream encoder configuration.
+#
+# This file lives on the HOST and is bind-mounted into the container at /config/encoders.toml
+# (STEAM_STREAM_ENCODER_CONFIG). The server reads it fresh at every stream start, so edits
+# here take effect on the next connection without a rebuild. A future web UI edits this same
+# file. If it's ever deleted, the server re-seeds it from encoder_config::defaults() on start.
+#
+# Placeholders substituted at stream start: {node} {width} {height} {fps} {bitrate}
+#   {vbv_buffer_size} {slices_per_frame} {color_space} {color_range} {payload_size}
+#   {fec_percentage} {min_required_fec_packets}
+#
+# Each encoder is tried in order; the first whose check_elements all instantiate wins.
+# The encoder_pipeline MUST contain `name=video_encoder` (MediaSession::update_bitrate
+# looks the element up by that name to retune bitrate/VBV on resume).
+
+[video]
+default_source = "waylanddisplaysrc name=wolf_wayland_source render-node={node} ! video/x-raw,format=RGBx,width={width},height={height},framerate={fps}/1"
+# Zero-copy capture head (WOLF_USE_ZERO_COPY=TRUE): waylanddisplaysrc outputs memory:CUDAMemory
+# directly (cuda-device-id makes it create its own CUDA context) -- no system-RAM download, no
+# cudaupload. Paired with an encoder's video_params_zero_copy. NVIDIA-only.
+default_source_zero_copy = "waylanddisplaysrc name=wolf_wayland_source render-node={node} cuda-device-id=0 ! video/x-raw(memory:CUDAMemory),width={width},height={height},framerate={fps}/1"
+default_sink = "rtpmoonlightpay_video name=moonlight_pay payload_size={payload_size} fec_percentage={fec_percentage} min_required_fec_packets={min_required_fec_packets} ! appsink name=video_sink sync=false max-buffers=1 drop=true"
+
+# ---- H264 (required; the fallback codec) ----
+[[video.h264_encoders]]
+plugin_name = "nvcodec"
+check_elements = ["nvh264enc", "cudaconvertscale", "cudaupload"]
+encoder_pipeline = "nvh264enc name=video_encoder preset=low-latency-hq zerolatency=true gop-size=0 rc-mode=cbr-ld-hq bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false ! h264parse ! video/x-h264,profile=main,stream-format=byte-stream"
+video_params = "cudaupload ! cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
+video_params_zero_copy = "cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
+
+[[video.h264_encoders]]
+plugin_name = "va"
+check_elements = ["vah264enc", "vapostproc"]
+encoder_pipeline = "vah264enc name=video_encoder aud=false b-frames=0 ref-frames=1 num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 key-int-max=1024 rate-control=cbr target-usage=6 ! h264parse ! video/x-h264,profile=main,stream-format=byte-stream"
+video_params = "vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1"
+
+[[video.h264_encoders]]
+plugin_name = "x264"
+check_elements = ["x264enc"]
+encoder_pipeline = "x264enc name=video_encoder pass=qual tune=zerolatency speed-preset=superfast b-adapt=false bframes=0 ref=1 sliced-threads=true threads={slices_per_frame} option-string=\"slices={slices_per_frame}:keyint=infinite:open-gop=0\" bitrate={bitrate} aud=false ! video/x-h264,profile=high,stream-format=byte-stream"
+video_params = "videoconvertscale ! videorate ! video/x-raw,width={width},height={height},framerate={fps}/1,format=I420,chroma-site={color_range},colorimetry={color_space}"
+
+# ---- HEVC ----
+[[video.hevc_encoders]]
+plugin_name = "nvcodec"
+check_elements = ["nvh265enc", "cudaconvertscale", "cudaupload"]
+encoder_pipeline = "nvh265enc name=video_encoder gop-size=-1 bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false rc-mode=cbr zerolatency=true preset=p1 tune=ultra-low-latency multi-pass=two-pass-quarter ! h265parse ! video/x-h265,profile=main,stream-format=byte-stream"
+video_params = "cudaupload ! cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
+video_params_zero_copy = "cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
+
+[[video.hevc_encoders]]
+plugin_name = "va"
+check_elements = ["vah265enc", "vapostproc"]
+encoder_pipeline = "vah265enc name=video_encoder aud=false b-frames=0 ref-frames=1 num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 key-int-max=1024 rate-control=cbr target-usage=6 ! h265parse ! video/x-h265,profile=main,stream-format=byte-stream"
+video_params = "vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1"
+
+# ---- AV1 ----
+[[video.av1_encoders]]
+plugin_name = "nvcodec"
+check_elements = ["nvav1enc", "cudaconvertscale", "cudaupload"]
+encoder_pipeline = "nvav1enc name=video_encoder gop-size=-1 bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} rc-mode=cbr zerolatency=true preset=p1 tune=ultra-low-latency multi-pass=two-pass-quarter ! av1parse ! video/x-av1,stream-format=obu-stream,alignment=frame,profile=main"
+video_params = "cudaupload ! cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
+video_params_zero_copy = "cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"

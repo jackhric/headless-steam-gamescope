@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <server/control.hpp>
+#include <server/encoder_config.hpp>
 #include <server/media.hpp>
 #include <server/rtsp_server.hpp>
 #include <server/servers.hpp>
@@ -50,6 +51,17 @@ int main() {
             state.hostname, state.uuid, state_dir);
 
   media::MediaSession::global_init();
+
+  // Seed the host-mounted encoder config now (if absent) so it exists for editing before the
+  // first stream, and log which encoders are actually available on this box.
+  {
+    auto cfg_path = encoder_config::config_path();
+    encoder_config::create_default_if_missing(cfg_path);
+    auto avail = encoder_config::available_encoders(encoder_config::load_or_seed());
+    logs::log(logs::info, "[ENCODER-CFG] config={} available: h264={} hevc={} av1={}", cfg_path,
+              avail.h264, avail.hevc, avail.av1);
+  }
+
   if (!control::ControlServer::global_init())
     logs::log(logs::warning, "ENet init failed -- control channel will not work");
   if (!input::uinput_available())
@@ -58,6 +70,21 @@ int main() {
 
   auto media_mtx = std::make_shared<std::mutex>();
   std::shared_ptr<media::MediaSession> media_holder;
+
+  // id match so a stale STOP can't kill a newer session.
+  auto stop_session = [&](std::size_t sid) {
+    std::shared_ptr<media::MediaSession> victim;
+    {
+      std::lock_guard<std::mutex> lk(*media_mtx);
+      if (media_holder && media_holder->session_id() == sid)
+        victim.swap(media_holder);
+    }
+    if (victim) {
+      logs::log(logs::info, "[MAIN] stopping session {} (STOP/cancel)", sid);
+      victim->stop();
+    }
+  };
+  state.stop_session = stop_session;
 
   control::ControlServer control_server(state.control_stream_port, state.sessions);
   control_server.set_idr_callback([&](std::size_t sid) {
@@ -69,6 +96,7 @@ int main() {
     std::lock_guard<std::mutex> lk(*media_mtx);
     return media_holder;
   });
+  control_server.set_stop_callback(stop_session);
   std::thread control_thread([&control_server]() { control_server.run(); });
 
   std::thread rtsp_thread([&]() {

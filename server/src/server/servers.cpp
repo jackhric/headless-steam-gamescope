@@ -455,8 +455,11 @@ void start_https(state::AppState &state) {
       log_req<SimpleWeb::HTTPS>(req);
       auto client_ip = req->remote_endpoint().address().to_string();
       if (auto sess = state.sessions->get_by_client_ip(client_ip)) {
-        state.sessions->remove(sess->session_id);
-        logs::log(logs::info, "[HTTP] cancel: removed session {} for {}", sess->session_id, client_ip);
+        auto sid = sess->session_id;
+        state.sessions->remove(sid);
+        if (state.stop_session)
+          state.stop_session(sid);
+        logs::log(logs::info, "[HTTP] cancel: stopped + removed session {} for {}", sid, client_ip);
       }
       XML xml;
       xml.put("root.<xmlattr>.status_code", 200);

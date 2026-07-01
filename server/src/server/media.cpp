@@ -11,6 +11,7 @@
 #include <helpers/logger.hpp>
 #include <mutex>
 #include <netinet/in.h>
+#include <server/encoder_config.hpp>
 #include <server/launcher.hpp>
 #include <sys/socket.h>
 #include <thread>
@@ -209,6 +210,77 @@ void watch_wayland_and_launch(GstElement *pipeline,
   }).detach();
 }
 
+// --- encoder diagnostics (gated by STEAM_STREAM_ENCODER_DIAG) ----------------
+// Prove the negotiated bitrate reaches the encoder and measure what actually comes out,
+// so we can tell encoder starvation (VBV) apart from downstream drops/network loss.
+
+bool encoder_diag_enabled() { return std::getenv("STEAM_STREAM_ENCODER_DIAG") != nullptr; }
+
+void log_encoder_readback(GstElement *pipeline) {
+  GstElement *enc = gst_bin_get_by_name(GST_BIN(pipeline), "video_encoder");
+  if (!enc) {
+    logs::log(logs::warning, "[MEDIA-DIAG] video_encoder not found for read-back");
+    return;
+  }
+  guint bitrate = 0, vbv = 0;
+  GParamSpec *ps_br = g_object_class_find_property(G_OBJECT_GET_CLASS(enc), "bitrate");
+  GParamSpec *ps_vbv = g_object_class_find_property(G_OBJECT_GET_CLASS(enc), "vbv-buffer-size");
+  if (ps_br)
+    g_object_get(enc, "bitrate", &bitrate, NULL);
+  if (ps_vbv)
+    g_object_get(enc, "vbv-buffer-size", &vbv, NULL);
+  logs::log(logs::info, "[MEDIA-DIAG] encoder live bitrate={}kbit/s vbv-buffer-size={}kbit", bitrate,
+            vbv);
+  gst_object_unref(enc);
+}
+
+// Per-encoder-src accounting: bytes and buffers over rolling ~1s windows -> Mbps out.
+struct EncoderRateProbe {
+  std::atomic<std::uint64_t> bytes{0};
+  std::atomic<std::uint64_t> buffers{0};
+  std::atomic<std::int64_t> window_start_ns{0};
+};
+
+GstPadProbeReturn encoder_rate_cb(GstPad *, GstPadProbeInfo *info, gpointer user_data) {
+  auto *p = static_cast<EncoderRateProbe *>(user_data);
+  GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+  if (!buf)
+    return GST_PAD_PROBE_OK;
+  p->bytes.fetch_add(gst_buffer_get_size(buf));
+  p->buffers.fetch_add(1);
+  gint64 now = g_get_monotonic_time() * 1000; // us -> ns
+  gint64 start = p->window_start_ns.load();
+  if (start == 0) {
+    p->window_start_ns.store(now);
+    return GST_PAD_PROBE_OK;
+  }
+  if (now - start >= 1'000'000'000) {
+    double secs = (now - start) / 1e9;
+    std::uint64_t b = p->bytes.exchange(0);
+    std::uint64_t frames = p->buffers.exchange(0);
+    p->window_start_ns.store(now);
+    logs::log(logs::info, "[MEDIA-DIAG] encoder out {:.2f} Mbps ({} buffers/{:.2f}s)",
+              (b * 8.0) / secs / 1e6, frames, secs);
+  }
+  return GST_PAD_PROBE_OK;
+}
+
+void attach_encoder_rate_probe(GstElement *pipeline) {
+  GstElement *enc = gst_bin_get_by_name(GST_BIN(pipeline), "video_encoder");
+  if (!enc) {
+    logs::log(logs::warning, "[MEDIA-DIAG] video_encoder not found for rate probe");
+    return;
+  }
+  GstPad *src = gst_element_get_static_pad(enc, "src");
+  if (src) {
+    auto *probe = new EncoderRateProbe(); // leaked: lives for the pipeline's lifetime
+    gst_pad_add_probe(src, GST_PAD_PROBE_TYPE_BUFFER, encoder_rate_cb, probe, nullptr);
+    gst_object_unref(src);
+    logs::log(logs::info, "[MEDIA-DIAG] encoder output rate probe attached");
+  }
+  gst_object_unref(enc);
+}
+
 GstElement *launch(const std::string &pipeline, const char *sink_name, UDPSink *sink) {
   GError *err = nullptr;
   GstElement *pl = gst_parse_launch(pipeline.c_str(), &err);
@@ -236,37 +308,71 @@ GstElement *launch(const std::string &pipeline, const char *sink_name, UDPSink *
     gst_object_unref(pl);
     return nullptr;
   }
+  if (encoder_diag_enabled() && gst_bin_get_by_name(GST_BIN(pl), "video_encoder")) {
+    log_encoder_readback(pl);
+    attach_encoder_rate_probe(pl);
+  }
   return pl;
 }
 
 } // namespace
 
 long encoder_vbv_kbit(long bitrate_kbps, int fps) {
-  // Size VBV against a 60fps floor so high refresh rates (e.g. 1080p240) don't starve the buffer
-  // and crush detailed frames under cbr-ld-hq.
-  int fps_floor = fps > 60 ? 60 : (fps > 0 ? fps : 60);
-  return bitrate_kbps / fps_floor;
+  // VBV is in kbits; bitrate_kbps is kbit/s, so bitrate_kbps/N == N-th-of-a-second of budget.
+  // A 1-frame buffer (the old bitrate/fps) starves detailed motion frames under cbr-ld-hq,
+  // producing blocky-in-motion / sharp-when-still. STEAM_STREAM_VBV_MS sets the HRD window in
+  // milliseconds (default 500ms) so the encoder can spend on complexity peaks without adding
+  // meaningful latency at CBR. Set a small value (e.g. 16) to restore the tight, old behaviour.
+  (void)fps;
+  long ms = 500;
+  if (const char *e = std::getenv("STEAM_STREAM_VBV_MS")) {
+    long parsed = std::atol(e);
+    if (parsed > 0)
+      ms = parsed;
+  }
+  long vbv = bitrate_kbps * ms / 1000;
+  return vbv > 0 ? vbv : bitrate_kbps; // never zero (0 == NVENC default = unbounded)
 }
 
 std::string build_video_pipeline(const session::StreamSession &s, const std::string &render_node) {
+  // Load config fresh so web-UI edits to encoders.toml apply on the next stream start.
+  auto cfg = encoder_config::load_or_seed();
+  auto encoder = encoder_config::select_encoder(cfg, s.video.format);
+  if (!encoder) {
+    logs::log(logs::error, "[MEDIA] no usable encoder for requested codec; cannot build pipeline");
+    return {};
+  }
+
+  bool zero_copy_env = std::getenv("WOLF_USE_ZERO_COPY") &&
+                       std::string(std::getenv("WOLF_USE_ZERO_COPY")) != "FALSE" &&
+                       std::string(std::getenv("WOLF_USE_ZERO_COPY")) != "false";
+
+  // Zero-copy needs BOTH the CUDAMemory capture head and the encoder's zero-copy params; they
+  // must switch together (a CUDAMemory source with a cudaupload param block, or vice-versa,
+  // won't link). Only engage when the config provides both, else use the RGBx source + params.
+  bool zero_copy = zero_copy_env && cfg.video.default_source_zero_copy.has_value() &&
+                   encoder->video_params_zero_copy.has_value();
+  const std::string &source = zero_copy ? *cfg.video.default_source_zero_copy
+                                        : cfg.video.default_source;
+  const std::string &video_params =
+      zero_copy ? *encoder->video_params_zero_copy : encoder->video_params;
+  logs::log(logs::info, "[MEDIA] video path: {} ({})", zero_copy ? "zero-copy CUDAMemory" : "RGBx",
+            encoder->plugin_name);
+
+  auto tmpl = fmt::format("{} ! {} ! {} ! {}", source, video_params, encoder->encoder_pipeline,
+                          cfg.video.default_sink);
+
   long vbv = encoder_vbv_kbit(s.video.bitrate_kbps, s.video.fps);
   return fmt::format(
-      "waylanddisplaysrc name=wolf_wayland_source render-node={node} ! "
-      "video/x-raw,format=RGBx,width={w},height={h},framerate={fps}/1 ! "
-      "cudaupload ! cudaconvertscale add-borders=true ! "
-      "video/x-raw(memory:CUDAMemory),width={w},height={h},chroma-site={crange},format=NV12,"
-      "colorimetry={cspace},pixel-aspect-ratio=1/1 ! "
-      "nvh264enc name=video_encoder preset=low-latency-hq zerolatency=true gop-size=0 rc-mode=cbr-ld-hq "
-      "bitrate={br} vbv-buffer-size={vbv} aud=false ! "
-      "h264parse ! video/x-h264,profile=main,stream-format=byte-stream ! "
-      "rtpmoonlightpay_video name=moonlight_pay payload_size={ps} fec_percentage={fec} "
-      "min_required_fec_packets={minfec} ! "
-      "appsink name=video_sink sync=false max-buffers=1 drop=true",
-      fmt::arg("node", render_node), fmt::arg("w", s.video.width), fmt::arg("h", s.video.height),
-      fmt::arg("fps", s.video.fps), fmt::arg("crange", color_range_str(s.video.color_range)),
-      fmt::arg("cspace", color_space_str(s.video.color_space)), fmt::arg("br", s.video.bitrate_kbps),
-      fmt::arg("vbv", vbv), fmt::arg("ps", s.video.packet_size), fmt::arg("fec", s.video.fec_percentage),
-      fmt::arg("minfec", s.video.min_required_fec_packets));
+      fmt::runtime(tmpl), fmt::arg("node", render_node), fmt::arg("width", s.video.width),
+      fmt::arg("height", s.video.height), fmt::arg("fps", s.video.fps),
+      fmt::arg("color_range", color_range_str(s.video.color_range)),
+      fmt::arg("color_space", color_space_str(s.video.color_space)),
+      fmt::arg("bitrate", s.video.bitrate_kbps), fmt::arg("vbv_buffer_size", vbv),
+      fmt::arg("slices_per_frame", s.video.slices_per_frame),
+      fmt::arg("payload_size", s.video.packet_size),
+      fmt::arg("fec_percentage", s.video.fec_percentage),
+      fmt::arg("min_required_fec_packets", s.video.min_required_fec_packets));
 }
 
 std::string build_audio_pipeline(const session::StreamSession &s, bool use_test_src) {

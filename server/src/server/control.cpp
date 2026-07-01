@@ -131,6 +131,8 @@ ControlServer::~ControlServer() { stop(); }
 
 void ControlServer::set_idr_callback(std::function<void(std::size_t)> cb) { on_idr_ = std::move(cb); }
 
+void ControlServer::set_stop_callback(std::function<void(std::size_t)> cb) { on_stop_ = std::move(cb); }
+
 void ControlServer::set_media_accessor(std::function<std::shared_ptr<media::MediaSession>()> cb) {
   get_media_ = std::move(cb);
 }
@@ -199,6 +201,8 @@ void ControlServer::run() {
           } else if (sub_type == TERMINATION) {
             logs::log(logs::info, "[ENET] client requested termination for session {}",
                       dev.session->session_id);
+            if (on_stop_)
+              on_stop_(dev.session->session_id);
           }
         } catch (const std::exception &e) {
           logs::log(logs::warning, "[ENET] failed to decrypt control packet: {}", e.what());

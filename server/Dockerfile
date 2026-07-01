@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libboost-log-dev \
         libboost-thread-dev \
         libboost-system-dev \
+        libtomlplusplus-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Header-only HTTP/HTTPS server lib, the exact fork+commit Wolf's rest/ uses

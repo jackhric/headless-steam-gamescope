@@ -18,6 +18,9 @@ public:
 
   void set_idr_callback(std::function<void(std::size_t /*session_id*/)> cb);
 
+  // ENet TERMINATION -> same teardown as HTTP /cancel.
+  void set_stop_callback(std::function<void(std::size_t /*session_id*/)> cb);
+
   // Accessor returns nullptr before PLAY / between sessions.
   void set_media_accessor(std::function<std::shared_ptr<media::MediaSession>()> cb);
 
@@ -30,6 +33,7 @@ private:
   int port_;
   std::shared_ptr<session::SessionRegistry> registry_;
   std::function<void(std::size_t)> on_idr_;
+  std::function<void(std::size_t)> on_stop_;
   std::function<std::shared_ptr<media::MediaSession>()> get_media_;
   std::atomic<bool> running_{false};
 };
