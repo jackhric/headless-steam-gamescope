@@ -394,10 +394,20 @@ void start_https(state::AppState &state) {
     std::shared_ptr<session::StreamSession> sess;
     if (resume) {
       sess = state.sessions->get_by_client_ip(client_ip);
+      // A resume can arrive from a different device (IP won't match); fall back to the single
+      // running session and adopt the new client.
+      if (!sess)
+        sess = state.sessions->get_running();
       if (!sess) {
         logs::log(logs::warning, "[HTTP] resume with no existing session for {}", client_ip);
         send_xml<SimpleWeb::HTTPS>(resp, SimpleWeb::StatusCode::client_error_bad_request, fail_pair("no session"));
         return;
+      }
+      if (sess->client_ip != client_ip) {
+        logs::log(logs::info, "[HTTP] resume: session {} moving client {} -> {}", sess->session_id,
+                  sess->client_ip, client_ip);
+        std::lock_guard<std::mutex> lk(*sess->mtx);
+        sess->client_ip = client_ip;
       }
       // Resume rotates the per-session AES key; re-capture the new rikey/rikeyid or control +
       // audio keep decrypting with the stale key and flood failures. Don't clobber a working
