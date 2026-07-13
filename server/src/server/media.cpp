@@ -148,10 +148,11 @@ int start_udp_listener(UDPSink *sink) {
 // compositor is up; launch the app into it (or STEAM_STREAM_TEST_CLIENT stand-in) so frames flow.
 void watch_wayland_and_launch(GstElement *pipeline,
                               const std::shared_ptr<session::StreamSession> &session,
-                              std::shared_ptr<std::atomic<pid_t>> app_pid) {
+                              std::shared_ptr<std::atomic<pid_t>> app_pid,
+                              const std::string &pulse_sink) {
   const char *test_cmd = std::getenv("STEAM_STREAM_TEST_CLIENT");
   std::string command = test_cmd ? test_cmd : "";
-  std::thread([pipeline, command, session, app_pid]() {
+  std::thread([pipeline, command, session, app_pid, pulse_sink]() {
     GstBus *bus = gst_pipeline_get_bus(GST_PIPELINE(pipeline));
     for (int i = 0; i < 200; i++) { // ~20s window
       GstMessage *msg =
@@ -196,7 +197,7 @@ void watch_wayland_and_launch(GstElement *pipeline,
           } else {
             logs::log(logs::info, "[MEDIA] compositor ready (WAYLAND_DISPLAY={}); launching app",
                       disp);
-            pid_t pid = launcher::launch_app(*session, disp);
+            pid_t pid = launcher::launch_app(*session, disp, pulse_sink);
             if (pid > 0)
               app_pid->store(pid);
           }
@@ -376,22 +377,30 @@ std::string build_video_pipeline(const session::StreamSession &s, const std::str
 }
 
 std::string build_audio_pipeline(const session::StreamSession &s, bool use_test_src) {
+  auto cfg = encoder_config::load_or_seed();
+  const auto &a = cfg.audio;
+
   std::string src =
       use_test_src
-          ? "audiotestsrc is-live=true wave=sine"
-          : fmt::format("pulsesrc device=\"{}\" server=\"{}\"", "steam-stream.monitor",
-                        std::getenv("PULSE_SERVER") ? std::getenv("PULSE_SERVER") : "");
+          ? "audiotestsrc is-live=true wave=sine ! audiorate ! audioconvert ! audioresample"
+          : fmt::format(fmt::runtime(a.default_source), fmt::arg("sink_name", a.sink_name),
+                        fmt::arg("server",
+                                 std::getenv("PULSE_SERVER") ? std::getenv("PULSE_SERVER") : ""));
+  auto enc = fmt::format(fmt::runtime(a.default_opus_encoder),
+                         fmt::arg("bitrate", a.bitrate_for_channels(s.audio.channels)),
+                         fmt::arg("packet_duration", s.audio.packet_duration));
+  // The caps (channel count + positioned channel-mask) are what keep opusenc in Opus channel
+  // mapping family 1; without the mask surround falls into family 255, which Moonlight can't
+  // decode against the advertised surround-params.
   return fmt::format(
-      "{src} ! audiorate ! audioconvert ! audioresample ! "
-      "audio/x-raw,channels={ch},channel-mask=(bitmask){mask},rate=48000 ! "
-      "opusenc bitrate={br} bitrate-type=cbr frame-size={pd} bandwidth=fullband "
-      "audio-type=restricted-lowdelay max-payload-size=1400 ! "
-      "rtpmoonlightpay_audio name=moonlight_pay packet_duration={pd} encrypt={enc} "
+      "{src} ! audio/x-raw,channels={ch},channel-mask=(bitmask){mask},rate=48000 ! {enc} ! "
+      "rtpmoonlightpay_audio name=moonlight_pay packet_duration={pd} encrypt={aenc} "
       "aes_key=\"{key}\" aes_iv=\"{iv}\" ! "
       "appsink name=audio_sink sync=false",
-      fmt::arg("src", src), fmt::arg("ch", s.audio.channels), fmt::arg("mask", channel_mask(s.audio.channels)),
-      fmt::arg("br", s.audio.bitrate), fmt::arg("pd", s.audio.packet_duration),
-      fmt::arg("enc", s.audio.encrypt ? "true" : "false"), fmt::arg("key", s.aes_key),
+      fmt::arg("src", src), fmt::arg("ch", s.audio.channels),
+      fmt::arg("mask", channel_mask(s.audio.channels)), fmt::arg("enc", enc),
+      fmt::arg("pd", s.audio.packet_duration),
+      fmt::arg("aenc", s.audio.encrypt ? "true" : "false"), fmt::arg("key", s.aes_key),
       fmt::arg("iv", s.aes_iv));
 }
 
@@ -409,6 +418,12 @@ std::shared_ptr<MediaSession> MediaSession::start(const std::shared_ptr<session:
   static std::atomic<bool> *running = new std::atomic<bool>(true); // process-lifetime
   bool audio_test = std::getenv("STEAM_STREAM_AUDIO_TEST") != nullptr;
 
+  // Recreate the pulse sink with the negotiated channel count BEFORE the pipeline opens the
+  // monitor source and before the app launches, so Steam/games detect 5.1/7.1 at startup.
+  auto pulse_sink = encoder_config::load_or_seed().audio.sink_name;
+  launcher::ensure_audio_sink(s->audio.channels, pulse_sink);
+  ms->audio_channels_ = s->audio.channels;
+
   // Video
   auto *vsink = new UDPSink(); // leaked: lives as long as the pipeline callback
   vsink->listen_port = s->video_stream_port;
@@ -421,11 +436,22 @@ std::shared_ptr<MediaSession> MediaSession::start(const std::shared_ptr<session:
   auto vpipe = build_video_pipeline(*s, render_node);
   logs::log(logs::info, "[MEDIA] starting video pipeline:\n{}", vpipe);
   ms->video_pipeline_ = launch(vpipe, "video_sink", vsink);
+  // Cold-plug controller 0 now, BEFORE the app (gamescope/Steam) launches, so the common single-
+  // controller case is present for Steam/SDL's initial scan. Additional controllers are hotplugged
+  // on demand (gamepad_arrival / gamepad_update) as the client connects them.
+  {
+    std::lock_guard<std::mutex> lk(ms->gamepad_mtx_);
+    if (auto pad = input::VirtualGamepad::create())
+      ms->gamepads_[0] = std::move(pad);
+    else
+      logs::log(logs::warning, "[MEDIA] failed to create virtual gamepad 0 at session start");
+  }
+
   if (ms->video_pipeline_) {
     ms->wayland_src_ = gst_bin_get_by_name(GST_BIN(ms->video_pipeline_), "wolf_wayland_source");
     if (!ms->wayland_src_)
       logs::log(logs::warning, "[MEDIA] wolf_wayland_source not found -- input injection disabled");
-    watch_wayland_and_launch(ms->video_pipeline_, s, ms->app_pid_);
+    watch_wayland_and_launch(ms->video_pipeline_, s, ms->app_pid_, pulse_sink);
   }
 
   // Audio
@@ -477,6 +503,48 @@ void MediaSession::mouse_axis(double x, double y) {
 void MediaSession::keyboard_key(unsigned int linux_key, bool pressed) {
   send_wayland_event(gst_structure_new("KeyboardKey", "key", G_TYPE_UINT, linux_key, "pressed",
                                        G_TYPE_BOOLEAN, pressed, NULL));
+}
+
+void MediaSession::gamepad_arrival(int controller_number) {
+  std::lock_guard<std::mutex> lk(gamepad_mtx_);
+  if (gamepads_.count(controller_number))
+    return;
+  if (auto pad = input::VirtualGamepad::create()) {
+    gamepads_[controller_number] = std::move(pad);
+    logs::log(logs::info, "[MEDIA] gamepad {} arrived (hotplug)", controller_number);
+  } else {
+    logs::log(logs::warning, "[MEDIA] failed to create gamepad {} on arrival", controller_number);
+  }
+}
+
+void MediaSession::gamepad_update(int controller_number, std::uint16_t active_gamepad_mask,
+                                  std::uint32_t button_flags, std::uint8_t left_trigger,
+                                  std::uint8_t right_trigger, short left_x, short left_y,
+                                  short right_x, short right_y) {
+  std::lock_guard<std::mutex> lk(gamepad_mtx_);
+
+  // Departure: Moonlight clears this controller's bit in the mask on disconnect. Tear the pad down
+  // (its dtor sends the fake-udev "remove") so the running game sees the unplug.
+  bool present = active_gamepad_mask & (1u << controller_number);
+  if (!present) {
+    if (gamepads_.erase(controller_number))
+      logs::log(logs::info, "[MEDIA] gamepad {} removed (hotplug)", controller_number);
+    return;
+  }
+
+  // Lazily create on first mention -- old Moonlight clients don't send CONTROLLER_ARRIVAL.
+  auto it = gamepads_.find(controller_number);
+  if (it == gamepads_.end()) {
+    auto pad = input::VirtualGamepad::create();
+    if (!pad) {
+      logs::log(logs::warning, "[MEDIA] failed to create gamepad {} on first update",
+                controller_number);
+      return;
+    }
+    it = gamepads_.emplace(controller_number, std::move(pad)).first;
+    logs::log(logs::info, "[MEDIA] gamepad {} created (lazy)", controller_number);
+  }
+  it->second->update(button_flags, left_trigger, right_trigger, left_x, left_y, right_x, right_y);
 }
 
 void MediaSession::force_idr() {
@@ -545,6 +613,19 @@ void MediaSession::retarget() {
   }
 }
 
+void MediaSession::rebuild_audio(const session::StreamSession &s) {
+  if (audio_pipeline_) {
+    gst_element_set_state(audio_pipeline_, GST_STATE_NULL);
+    gst_object_unref(audio_pipeline_);
+    audio_pipeline_ = nullptr;
+  }
+  bool audio_test = std::getenv("STEAM_STREAM_AUDIO_TEST") != nullptr;
+  auto apipe = build_audio_pipeline(s, audio_test);
+  logs::log(logs::info, "[MEDIA] restarting audio pipeline ({}ch):\n{}", s.audio.channels, apipe);
+  audio_pipeline_ = launch(apipe, "audio_sink", audio_sink_);
+  audio_channels_ = s.audio.channels;
+}
+
 void MediaSession::stop() {
   // The abstract X11 socket (@/tmp/.X11-unix/X0) is only freed on process exit, so BLOCK until
   // the app's process group is gone -- else the next session hits "Address already in use".
@@ -566,6 +647,12 @@ void MediaSession::stop() {
       }
     }
     logs::log(logs::info, "[MEDIA] app group {} {}", pid, dead ? "reaped" : "still lingering");
+  }
+  {
+    // Destroy all virtual pads (each dtor sends the fake-udev "remove") so a resumed/next session
+    // starts clean and the game sees the controllers unplug.
+    std::lock_guard<std::mutex> lk(gamepad_mtx_);
+    gamepads_.clear();
   }
   if (wayland_src_) {
     gst_object_unref(wayland_src_);

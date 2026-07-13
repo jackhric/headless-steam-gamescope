@@ -5,6 +5,7 @@
 #include <enet/enet.h>
 #include <helpers/logger.hpp>
 #include <map>
+#include <string>
 #include <server/control_packets.hpp>
 #include <server/media.hpp>
 #include <server/uinput.hpp>
@@ -28,11 +29,10 @@ std::pair<std::string, int> get_ip(const sockaddr *addr) {
   return {std::string(data), port};
 }
 
-// Mouse/keyboard/scroll go through the compositor (waylanddisplaysrc); the gamepad isn't a
-// Wayland input type so it stays on uinput.
+// Mouse/keyboard/scroll go through the compositor (waylanddisplaysrc); the gamepad is cold-plugged
+// by the MediaSession at session start and driven via mm->gamepad_update.
 struct ClientDevices {
   std::shared_ptr<session::StreamSession> session;
-  std::unique_ptr<input::VirtualGamepad> gamepad;
 };
 
 void handle_input(ClientDevices &dev, const INPUT_PKT *pkt,
@@ -87,27 +87,22 @@ void handle_input(ClientDevices &dev, const INPUT_PKT *pkt,
     break;
   }
   case CONTROLLER_ARRIVAL: {
-    // Modern Moonlight announces the pad with CONTROLLER_ARRIVAL before sending state. Create the
-    // virtual device now so it (and its fake-udev hotplug event) exists before the game enumerates
-    // controllers -- otherwise Steam, which scanned at launch, never notices the later pad.
-    if (!dev.gamepad) {
-      dev.gamepad = input::VirtualGamepad::create();
-      logs::log(logs::info, "[ENET] CONTROLLER_ARRIVAL -> virtual gamepad {}",
-                dev.gamepad ? "created" : "FAILED");
-    }
+    auto p = (const CONTROLLER_ARRIVAL_PACKET *)pkt;
+    if (mm)
+      mm->gamepad_arrival(p->controller_number);
     break;
   }
   case CONTROLLER_MULTI: {
     auto p = (const CONTROLLER_MULTI_PACKET *)pkt;
-    if (!dev.gamepad)
-      dev.gamepad = input::VirtualGamepad::create();
-    if (dev.gamepad)
-      dev.gamepad->update(boost::endian::little_to_native((std::uint16_t)p->button_flags),
-                          p->left_trigger, p->right_trigger,
-                          boost::endian::little_to_native(p->left_stick_x),
-                          boost::endian::little_to_native(p->left_stick_y),
-                          boost::endian::little_to_native(p->right_stick_x),
-                          boost::endian::little_to_native(p->right_stick_y));
+    if (mm)
+      mm->gamepad_update(
+          boost::endian::little_to_native((std::uint16_t)p->controller_number),
+          boost::endian::little_to_native((std::uint16_t)p->active_gamepad_mask),
+          boost::endian::little_to_native((std::uint16_t)p->button_flags), p->left_trigger,
+          p->right_trigger, boost::endian::little_to_native(p->left_stick_x),
+          boost::endian::little_to_native(p->left_stick_y),
+          boost::endian::little_to_native(p->right_stick_x),
+          boost::endian::little_to_native(p->right_stick_y));
     break;
   }
   default:

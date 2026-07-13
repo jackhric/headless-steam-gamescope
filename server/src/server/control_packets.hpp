@@ -98,6 +98,15 @@ struct CONTROLLER_MULTI_PACKET : INPUT_PKT {
   short tailB;
 };
 
+// Sent (type CONTROLLER_ARRIVAL) when a controller connects, before its CONTROLLER_MULTI state.
+// We only need controller_number -- the pad is created generic (Xbox) regardless of controller_type.
+struct CONTROLLER_ARRIVAL_PACKET : INPUT_PKT {
+  unsigned char controller_number;
+  unsigned char controller_type;
+  unsigned char capabilities;
+  unsigned int support_button_flags;
+};
+
 #pragma pack(pop)
 
 } // namespace pkts
