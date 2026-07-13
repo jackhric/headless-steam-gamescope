@@ -131,6 +131,16 @@ int main() {
                     s.session_id, existing->app_pid());
           // Apply the renegotiated bitrate before the IDR so the keyframe uses the new rate.
           existing->update_bitrate(s.video.bitrate_kbps, s.video.fps);
+          // A resume can renegotiate the audio layout; the Opus stream config is baked into the
+          // pipeline, so rebuild it or the client can't decode. The sink keeps its old layout
+          // (pulse remixes) -- true surround applies once the app is next relaunched.
+          if (existing->audio_channels() != s.audio.channels) {
+            logs::log(logs::info,
+                      "[RTSP] resume changed audio {}ch -> {}ch: rebuilding audio pipeline "
+                      "(relaunch the app for native surround)",
+                      existing->audio_channels(), s.audio.channels);
+            existing->rebuild_audio(s);
+          }
           existing->retarget();
           existing->force_idr();
           return;

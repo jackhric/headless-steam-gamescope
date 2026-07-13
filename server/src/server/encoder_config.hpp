@@ -34,8 +34,29 @@ struct GstVideoCfg {
   std::vector<GstEncoder> av1_encoders;
 };
 
+struct GstAudioCfg {
+  // Pulse null sink apps play into; the pipeline captures <sink_name>.monitor and the server
+  // recreates the sink with the negotiated channel count at each fresh session launch.
+  std::string sink_name;
+  std::string default_source;       // {sink_name} {server} placeholders
+  std::string default_opus_encoder; // {bitrate} {packet_duration} placeholders
+  // Opus bitrates per negotiated layout (Moonlight-standard defaults).
+  int bitrate_stereo = 96000;
+  int bitrate_51 = 256000;
+  int bitrate_71 = 450000;
+
+  int bitrate_for_channels(int channels) const {
+    switch (channels) {
+    case 6: return bitrate_51;
+    case 8: return bitrate_71;
+    default: return bitrate_stereo;
+    }
+  }
+};
+
 struct EncoderConfig {
   GstVideoCfg video;
+  GstAudioCfg audio;
 };
 
 // Per-codec availability, for a future web UI to render valid choices.

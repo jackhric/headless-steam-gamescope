@@ -10,6 +10,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -43,7 +44,63 @@ void push_passthrough(std::vector<std::string> &env, const char *key) {
 
 } // namespace
 
-pid_t launch_app(const session::StreamSession &s, const std::string &wayland_display) {
+bool ensure_audio_sink(int channels, const std::string &sink_name) {
+  const char *script = "/opt/steam-stream/pulse-sink.sh";
+  if (::access(script, R_OK) != 0) {
+    logs::log(logs::warning, "[LAUNCH] {} not found -- keeping existing pulse sink layout", script);
+    return false;
+  }
+
+  uid_t uid = static_cast<uid_t>(std::stoul(env_or("STEAM_STREAM_RUN_UID", "1000")));
+  gid_t gid = static_cast<gid_t>(std::stoul(env_or("STEAM_STREAM_RUN_GID", "1000")));
+  std::string home = env_or("STEAM_STREAM_HOME", "/home/retro");
+  std::string xdg = env_or("XDG_RUNTIME_DIR", "/tmp/sockets");
+  std::string user = env_or("STEAM_STREAM_RUN_USER", "retro");
+
+  pid_t pid = ::fork();
+  if (pid < 0) {
+    logs::log(logs::error, "[LAUNCH] ensure_audio_sink fork failed: {}", std::strerror(errno));
+    return false;
+  }
+  if (pid == 0) {
+    if (::geteuid() == 0) {
+      ::initgroups(user.c_str(), gid);
+      if (::setgid(gid) != 0 || ::setuid(uid) != 0)
+        _exit(126);
+    }
+    std::vector<std::string> env = {
+        "HOME=" + home,
+        "USER=" + user,
+        "XDG_RUNTIME_DIR=" + xdg,
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    };
+    if (const char *p = std::getenv("PULSE_SERVER"); p && *p)
+      env.push_back(std::string("PULSE_SERVER=") + p);
+    std::vector<char *> envp;
+    envp.reserve(env.size() + 1);
+    for (auto &e : env)
+      envp.push_back(const_cast<char *>(e.c_str()));
+    envp.push_back(nullptr);
+    auto ch = std::to_string(channels);
+    ::execle("/bin/bash", "bash", script, ch.c_str(), sink_name.c_str(),
+             static_cast<char *>(nullptr), envp.data());
+    _exit(127);
+  }
+
+  int status = 0;
+  if (::waitpid(pid, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    logs::log(logs::warning,
+              "[LAUNCH] pulse-sink.sh {}ch failed (status {}) -- audio stays on the current sink "
+              "layout (remixed)",
+              channels, WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    return false;
+  }
+  logs::log(logs::info, "[LAUNCH] pulse sink '{}' ready with {} channels", sink_name, channels);
+  return true;
+}
+
+pid_t launch_app(const session::StreamSession &s, const std::string &wayland_display,
+                 const std::string &pulse_sink) {
   auto spec = spec_for(s);
 
   std::string script = env_or("STEAM_STREAM_LAUNCH_SCRIPT", "/opt/gow/startup-app.sh");
@@ -104,7 +161,8 @@ pid_t launch_app(const session::StreamSession &s, const std::string &wayland_dis
       "WAYLAND_DISPLAY=" + wayland_display,
       spec.gow_var,
       "APPIMAGE_EXTRACT_AND_RUN=1",
-      "PULSE_SINK=" + std::string(env_or("PULSE_SINK", "steam-stream")),
+      "PULSE_SINK=" + (pulse_sink.empty() ? std::string(env_or("PULSE_SINK", "steam-stream"))
+                                          : pulse_sink),
       fmt::format("GAMESCOPE_WIDTH={}", w),
       fmt::format("GAMESCOPE_HEIGHT={}", h),
       fmt::format("GAMESCOPE_REFRESH={}", fps),

@@ -66,10 +66,11 @@ for _ in $(seq 1 20); do
   gosu "${UNAME}" env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" pactl info >/dev/null 2>&1 && break
   sleep 0.5
 done
+# Default stereo sink so audio works before the first stream; the server re-runs pulse-sink.sh
+# with the client's negotiated channel count (2/6/8) at each fresh session launch.
 gosu "${UNAME}" env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
-  pactl load-module module-null-sink sink_name=steam-stream \
-    sink_properties=device.description=steam-stream >/dev/null 2>&1 \
-  || gow_log "[entrypoint] WARN: could not load steam-stream null sink (already loaded?)"
+  /opt/steam-stream/pulse-sink.sh 2 \
+  || gow_log "[entrypoint] WARN: could not create steam-stream null sink"
 gow_log "[entrypoint] pulse sinks: $(gosu "${UNAME}" env XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" pactl list short sinks 2>/dev/null | tr '\n' ';')"
 
 export PULSE_SERVER="${PULSE_SOCK}"

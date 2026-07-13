@@ -111,6 +111,6 @@ RUN printf '#!/bin/sh\nexit 0\n' > /usr/local/bin/mangoapp \
 
 # ---- entrypoint ----------------------------------------------------------------------------
 COPY rootfs/ /
-RUN chmod +x /opt/steam-stream/entrypoint.sh
+RUN chmod +x /opt/steam-stream/entrypoint.sh /opt/steam-stream/pulse-sink.sh
 
 ENTRYPOINT ["/opt/steam-stream/entrypoint.sh"]

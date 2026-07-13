@@ -16,40 +16,44 @@
 namespace rtsp {
 
 namespace audio_cfg {
-enum Speaker { FRONT_LEFT, FRONT_RIGHT, FRONT_CENTER, LOW_FREQUENCY, BACK_LEFT, BACK_RIGHT, SIDE_LEFT, SIDE_RIGHT };
 
 struct Config {
   int channels;
   int streams;
   int coupled_streams;
   int bitrate;
-  std::vector<Speaker> speakers;
 };
 
+// streams/coupled_streams mirror what opusenc derives on its own from the channel count
+// (natural pairs coupled, the rest mono) -- it cannot be configured, so don't change these
+// or Moonlight will not be able to decode audio.
 inline const std::vector<Config> &configurations() {
   static const std::vector<Config> cfgs = {
-      {2, 1, 1, 96000, {FRONT_LEFT, FRONT_RIGHT}},
-      {6, 4, 2, 256000, {FRONT_LEFT, FRONT_RIGHT, FRONT_CENTER, LOW_FREQUENCY, BACK_LEFT, BACK_RIGHT}},
-      {8, 5, 3, 450000,
-       {FRONT_LEFT, FRONT_RIGHT, FRONT_CENTER, LOW_FREQUENCY, BACK_LEFT, BACK_RIGHT, SIDE_LEFT, SIDE_RIGHT}}};
+      {2, 1, 1, 96000}, {6, 4, 2, 256000}, {8, 5, 3, 450000}};
   return cfgs;
 }
 
-// GFE channel remap + rotate: Moonlight needs this exact ordering or it can't decode
-// surround audio.
+// Opus channel mapping advertised in surround-params: digit i = the opusenc coded channel that
+// feeds Moonlight output speaker i (order FL FR FC LFE BL BR SL SR). opusenc couples the natural
+// pairs first (FL/FR, BL/BR, SL/SR) and appends the monos (FC, LFE), so the coded order is
+// [FL FR BL BR FC LFE] for 5.1 and [FL FR BL BR SL SR FC LFE] for 7.1. NOTE: 7.1 deliberately
+// differs from Wolf, whose mapping mislabels the SL/SR pair as the FC/LFE monos (its 7.1 was
+// still reported broken after the 5.1 fix in wolf#199).
 inline std::string speaker_string(const Config &c) {
-  std::vector<Speaker> m = c.speakers;
+  std::vector<int> m = {0, 1};
   if (c.channels == 6) {
-    m = {FRONT_LEFT, FRONT_RIGHT, BACK_LEFT, BACK_RIGHT, FRONT_CENTER, LOW_FREQUENCY};
+    m = {0, 1, 4, 5, 2, 3};
   } else if (c.channels == 8) {
-    m = {FRONT_LEFT, FRONT_RIGHT, BACK_LEFT, BACK_RIGHT, FRONT_CENTER, LOW_FREQUENCY, SIDE_LEFT, SIDE_RIGHT};
+    m = {0, 1, 6, 7, 2, 3, 4, 5};
   }
+  // GFE-compat rotate: Moonlight assumes GFE speaker order and un-rotates by moving the last
+  // digit back to index 3.
   if (c.channels > 2) {
     std::rotate(m.begin() + 3, m.begin() + 4, m.end());
   }
   std::string s;
-  for (auto sp : m)
-    s += static_cast<char>(static_cast<int>(sp) + '0');
+  for (auto coded : m)
+    s += static_cast<char>(coded + '0');
   return s;
 }
 

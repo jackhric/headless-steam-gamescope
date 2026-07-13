@@ -36,6 +36,16 @@ constexpr const char *kDefaultSink =
     "fec_percentage={fec_percentage} min_required_fec_packets={min_required_fec_packets} ! "
     "appsink name=video_sink sync=false max-buffers=1 drop=true";
 
+constexpr const char *kDefaultAudioSinkName = "steam-stream";
+constexpr const char *kDefaultAudioSource =
+    "pulsesrc device=\"{sink_name}.monitor\" server=\"{server}\" ! "
+    "audiorate ! audioconvert ! audioresample";
+// CBR + restricted-lowdelay + fullband are what Moonlight's decoder expects; the caps upstream
+// (channels + channel-mask) keep opusenc in channel-mapping-family 1 for surround.
+constexpr const char *kDefaultOpusEncoder =
+    "opusenc bitrate={bitrate} bitrate-type=cbr frame-size={packet_duration} bandwidth=fullband "
+    "audio-type=restricted-lowdelay max-payload-size=1400";
+
 // Non-zero-copy path: system RGBx -> cudaupload -> GPU NV12. The zero-copy variant drops
 // cudaupload because the buffer is already CUDA-resident (see kDefaultSourceZeroCopy) -- only
 // valid when paired with that source.
@@ -180,6 +190,9 @@ EncoderConfig defaults() {
   cfg.video.h264_encoders = {nv_h264(), va_h264(), sw_h264()};
   cfg.video.hevc_encoders = {nv_hevc(), va_hevc()};
   cfg.video.av1_encoders = {nv_av1()};
+  cfg.audio.sink_name = kDefaultAudioSinkName;
+  cfg.audio.default_source = kDefaultAudioSource;
+  cfg.audio.default_opus_encoder = kDefaultOpusEncoder;
   return cfg;
 }
 
@@ -214,6 +227,18 @@ std::optional<EncoderConfig> load(const std::string &path) {
   cfg.video.h264_encoders = encoders_from_toml((*video)["h264_encoders"].as_array());
   cfg.video.hevc_encoders = encoders_from_toml((*video)["hevc_encoders"].as_array());
   cfg.video.av1_encoders = encoders_from_toml((*video)["av1_encoders"].as_array());
+
+  // [audio] is optional so configs seeded before it existed keep working on the defaults.
+  const auto d = defaults().audio;
+  cfg.audio = d;
+  if (auto audio = root["audio"].as_table()) {
+    cfg.audio.sink_name = (*audio)["sink_name"].value_or(d.sink_name);
+    cfg.audio.default_source = (*audio)["default_source"].value_or(d.default_source);
+    cfg.audio.default_opus_encoder = (*audio)["default_opus_encoder"].value_or(d.default_opus_encoder);
+    cfg.audio.bitrate_stereo = (*audio)["bitrate_stereo"].value_or(d.bitrate_stereo);
+    cfg.audio.bitrate_51 = (*audio)["bitrate_51"].value_or(d.bitrate_51);
+    cfg.audio.bitrate_71 = (*audio)["bitrate_71"].value_or(d.bitrate_71);
+  }
   return cfg;
 }
 
@@ -227,8 +252,17 @@ bool save(const EncoderConfig &cfg, const std::string &path) {
   video.insert("hevc_encoders", encoders_to_toml(cfg.video.hevc_encoders));
   video.insert("av1_encoders", encoders_to_toml(cfg.video.av1_encoders));
 
+  toml::table audio;
+  audio.insert("sink_name", cfg.audio.sink_name);
+  audio.insert("default_source", cfg.audio.default_source);
+  audio.insert("default_opus_encoder", cfg.audio.default_opus_encoder);
+  audio.insert("bitrate_stereo", cfg.audio.bitrate_stereo);
+  audio.insert("bitrate_51", cfg.audio.bitrate_51);
+  audio.insert("bitrate_71", cfg.audio.bitrate_71);
+
   toml::table root;
   root.insert("video", std::move(video));
+  root.insert("audio", std::move(audio));
 
   std::ofstream out(path, std::ios::binary | std::ios::trunc);
   if (!out) {
@@ -272,6 +306,13 @@ std::vector<std::string> validate(const EncoderConfig &cfg) {
   check_list("h264_encoders", cfg.video.h264_encoders);
   check_list("hevc_encoders", cfg.video.hevc_encoders);
   check_list("av1_encoders", cfg.video.av1_encoders);
+
+  if (cfg.audio.sink_name.empty())
+    issues.push_back("audio.sink_name is empty");
+  if (cfg.audio.default_source.empty())
+    issues.push_back("audio.default_source is empty");
+  if (cfg.audio.default_opus_encoder.empty())
+    issues.push_back("audio.default_opus_encoder is empty");
   return issues;
 }
 

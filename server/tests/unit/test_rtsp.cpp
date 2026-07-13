@@ -99,7 +99,10 @@ int main() {
     CHECK_EQ(r.payloads[0].second, "AAAAAU"s, "payload[0] sprop");
     CHECK_EQ(r.payloads[1].second, "fmtp:97 surround-params=21101"s, "stereo surround-params");
     CHECK_EQ(r.payloads[2].second, "fmtp:97 surround-params=642014235"s, "5.1 surround-params");
-    CHECK_EQ(r.payloads[3].second, "fmtp:97 surround-params=85301423675"s, "7.1 surround-params");
+    // 7.1 coded order is [FL FR BL BR SL SR FC LFE] (opusenc couples all three natural pairs);
+    // pre-rotation mapping [0,1,6,7,2,3,4,5], GFE-rotated on the wire. Deliberately differs
+    // from Wolf, whose 7.1 mapping mislabels SL/SR as the FC/LFE monos.
+    CHECK_EQ(r.payloads[3].second, "fmtp:97 surround-params=85301623457"s, "7.1 surround-params");
     CHECK_EQ(r.payloads[4].second, "x-ss-general.featureFlags: 3"s, "featureFlags");
   }
 
