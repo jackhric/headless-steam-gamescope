@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/header.png" alt="Steam Headless" width="100%">
+</p>
+
 # Steam Headless (Gamescope session)
 
 This repo allows you to run Steam as a headless Docker container, with emphasis on the Gamescope session that is utilized by the Steam Deck and Steam Machine. Tested on Arch with NVIDIA.
