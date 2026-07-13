@@ -66,6 +66,12 @@ private:
   int fd_ = -1;
   fake_udev::Device udev_dev_;
   bool udev_plugged_ = false;
+  // Back-hold -> Home chord state (see update()).
+  bool back_held_ = false;
+  bool home_fired_ = false;  // Home already triggered for the current hold
+  bool home_down_ = false;   // Home button currently held (being released ~120ms after press)
+  long back_press_ms_ = 0;
+  long home_press_ms_ = 0;
 };
 
 } // namespace input

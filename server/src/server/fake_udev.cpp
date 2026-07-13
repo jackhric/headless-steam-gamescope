@@ -21,6 +21,7 @@ namespace fake_udev {
 namespace {
 
 const char *kUdevDataDir = "/run/udev/data";
+const char *kUdevCtrlPath = "/run/udev/control";
 
 // MurmurHash2 (public domain, Austin Appleby) -- libudev hashes the subsystem string with this
 // into the netlink header so kernel socket filters can match it. Must be byte-identical to
@@ -183,6 +184,18 @@ void remove_hwdb(const Device &dev) {
   std::filesystem::remove(hwdb_path(dev), ec);
 }
 
+// libudev decides a udev daemon is running by the presence of /run/udev/control; without it,
+// SDL's udev backend concludes udev is absent and won't hotplug-enumerate our injected event.
+// Wolf creates this same empty control file (docker.cpp). Mode 0777 so any uid can stat it.
+void ensure_udev_control() {
+  std::error_code ec;
+  std::filesystem::create_directories("/run/udev", ec);
+  if (std::filesystem::exists(kUdevCtrlPath, ec))
+    return;
+  std::ofstream(kUdevCtrlPath).close();
+  std::filesystem::permissions(kUdevCtrlPath, std::filesystem::perms::all, ec);
+}
+
 } // namespace
 
 bool device_from_uinput_fd(int fd, Device &out) {
@@ -223,6 +236,7 @@ bool device_from_uinput_fd(int fd, Device &out) {
 }
 
 void plug(const Device &dev) {
+  ensure_udev_control();
   write_hwdb(dev);
   bool sent = send_uevent(base_event(dev, "add"));
   logs::log(logs::info, "[FAKE-UDEV] plug {} (c{}:{}) uevent={}", dev.devnode, dev.major, dev.minor,

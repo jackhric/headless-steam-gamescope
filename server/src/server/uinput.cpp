@@ -1,5 +1,6 @@
 #include <server/uinput.hpp>
 
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <helpers/logger.hpp>
@@ -285,8 +286,54 @@ void VirtualGamepad::update(std::uint32_t button_flags,
                             short left_y,
                             short right_x,
                             short right_y) {
-  for (const auto &b : kPadButtons)
-    emit(fd_, EV_KEY, b.code, (button_flags & b.ml) ? 1 : 0);
+  // Back-hold -> Home (Guide) chord (mirrors Sunshine's back_button_timeout behaviour). Moonlight
+  // streams controller packets continuously while a pad is connected, so we run a non-blocking
+  // state machine off update() instead of a timer thread. Back (BTN_SELECT) is suppressed while
+  // held: a short tap emits a real Back tap on release; a >=750ms hold emits Home (BTN_MODE) and
+  // never emits Back. Home is HELD for ~100ms across packets (a zero-length tap isn't detected by
+  // SDL/Steam -- this was the bug in the first attempt).
+  constexpr std::uint32_t kBackFlag = 0x0020; // Moonlight BACK -> BTN_SELECT
+  constexpr long kHoldMs = 750;               // back-hold threshold
+  constexpr long kHomeHoldMs = 120;           // how long to hold Home once fired
+  bool back_now = button_flags & kBackFlag;
+  long now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+
+  if (back_now && !back_held_) {
+    back_held_ = true;
+    back_press_ms_ = now_ms;
+    home_fired_ = false;
+  } else if (!back_now && back_held_) {
+    back_held_ = false;
+    if (!home_fired_) { // released before threshold -> synthesize a normal Back tap
+      emit(fd_, EV_KEY, BTN_SELECT, 1);
+      syn(fd_);
+      emit(fd_, EV_KEY, BTN_SELECT, 0);
+      syn(fd_);
+    }
+  }
+
+  // Cross the threshold once: press Home and record when, so we can release it ~kHomeHoldMs later.
+  if (back_held_ && !home_fired_ && now_ms - back_press_ms_ >= kHoldMs) {
+    home_fired_ = true;
+    home_down_ = true;
+    home_press_ms_ = now_ms;
+    logs::log(logs::info, "[UINPUT] back-hold -> Home (Guide) press");
+  }
+  // Release Home after the hold window (even if Back is still down).
+  if (home_down_ && now_ms - home_press_ms_ >= kHomeHoldMs)
+    home_down_ = false;
+
+  for (const auto &b : kPadButtons) {
+    // Back is driven by the chord state machine above, not the raw flags.
+    if (b.code == BTN_SELECT)
+      continue;
+    // Home: real guide presses (0x0400) pass through, OR'd with the chord-synthesized press.
+    // The kernel input core drops duplicate key states, so re-emitting each packet is fine.
+    bool on = (button_flags & b.ml) || (b.code == BTN_MODE && home_down_);
+    emit(fd_, EV_KEY, b.code, on ? 1 : 0);
+  }
 
   int hat_x = (button_flags & 0x0008 ? 1 : 0) - (button_flags & 0x0004 ? 1 : 0); // RIGHT - LEFT
   int hat_y = (button_flags & 0x0002 ? 1 : 0) - (button_flags & 0x0001 ? 1 : 0); // DOWN - UP
