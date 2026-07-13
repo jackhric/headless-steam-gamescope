@@ -180,7 +180,8 @@ pid_t launch_app(const session::StreamSession &s, const std::string &wayland_dis
 
   for (const char *k : {"NVIDIA_DRIVER_CAPABILITIES", "NVIDIA_VISIBLE_DEVICES",
                         "LD_LIBRARY_PATH", "WLR_RENDERER", "WLR_NO_HARDWARE_CURSORS",
-                        "STEAM_STARTUP_FLAGS", "GAMESCOPE_MODE", "PROTON_LOG", "DISPLAY"})
+                        "STEAM_STARTUP_FLAGS", "GAMESCOPE_MODE", "GAMESCOPE_XWAYLAND_COUNT",
+                        "STEAM_MULTIPLE_XWAYLANDS", "PROTON_LOG", "DISPLAY"})
     push_passthrough(env, k);
 
   std::vector<char *> envp;

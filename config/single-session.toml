@@ -1,12 +1,3 @@
-# DRAFT app config for steam-stream (process runner = in-container Steam).
-# Merge these [[profiles.apps]] into a full Wolf config (copy the [[gstreamer.video]]/
-# [[gstreamer.audio]] encoder blocks, paired_clients, and [[profiles]] header from
-# reference/wolf/src/moonlight-server/state/default/config.v7.toml).
-#
-# Idea: type="process" runs the GOW Steam launcher IN THIS container (no 2nd container);
-# start_virtual_compositor=true gives each app a gst-wayland-display producer. Both apps
-# share /home/retro -> one Steam login/library. Two tiles = Game Mode vs Desktop.
-
 [[profiles]]
 id = "moonlight-profile-id"
 name = "User"
@@ -18,7 +9,7 @@ name = "User"
   start_audio_server = true
     [profiles.apps.runner]
     type = "process"
-    # GOW launcher reads RUN_GAMESCOPE + the WAYLAND_DISPLAY/GAMESCOPE_* that Wolf injects.
+
     run_cmd = "bash -lc 'export RUN_GAMESCOPE=true APPIMAGE_EXTRACT_AND_RUN=1; exec /opt/gow/startup-app.sh'"
 
   # ---- Desktop Mode (sway) ----
@@ -29,11 +20,3 @@ name = "User"
     [profiles.apps.runner]
     type = "process"
     run_cmd = "bash -lc 'export RUN_SWAY=1 APPIMAGE_EXTRACT_AND_RUN=1; exec /opt/gow/startup-app.sh'"
-
-# OPEN ITEMS (validate with user + a Moonlight client):
-#  - process-runner user/uid: must run as retro(1000), HOME=/home/retro, XDG_RUNTIME_DIR set.
-#    Entrypoint must run GOW cont-init (10-setup_user,15-setup_devices,30-nvidia) before /wolf/wolf.
-#  - single shared session: confirm a 2nd client JOINS the running app (lobbies) vs spawns new.
-#  - video encoder: use the NON-zero-copy nvenc block (RGBx -> cudaupload) from config.v7.toml,
-#    with WOLF_USE_ZERO_COPY=FALSE (CUDAMemory zero-copy panics under CDI).
-#  - WOLF_RENDER_NODE=/dev/dri/renderD129; mount /dev/uinput; CDI --device nvidia.com/gpu=all.
