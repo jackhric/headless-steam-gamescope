@@ -1,6 +1,4 @@
 #!/bin/sh
-# Override of GOW's system-services.sh: drops Decky Loader, which CEF-injects into
-# steamwebhelper and crash-loops on this host, taking Big Picture down with it.
 
 source /opt/gow/bash-lib/utils.sh
 
@@ -19,8 +17,6 @@ gow_log "*** NetworkManager started ***"
 steamos-dbus-watchdog.sh &
 gow_log "*** D-Bus Watchdog started ***"
 
-# A prior boot may have left a Decky autostart on the /home volume; keep it dormant and
-# clear the CEF remote-debugging marker so steamwebhelper runs clean.
 if [ -n "${HOME:-}" ] && [ -x "${HOME}/homebrew/services/PluginLoader" ]; then
   gow_log "[system-services] Decky PluginLoader present on volume -- leaving it dormant (not started)"
 fi

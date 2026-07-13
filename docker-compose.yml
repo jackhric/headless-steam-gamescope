@@ -9,9 +9,6 @@ services:
     restart: unless-stopped
     network_mode: host
 
-    # --- NVIDIA GPU via CDI ---------------------------------------------------------------
-    # Requires the NVIDIA Container Toolkit with CDI generated (/etc/cdi/nvidia.yaml).
-    # CLI equivalent: `--device nvidia.com/gpu=all`.
     devices:
       - nvidia.com/gpu=all
       - /dev/uinput:/dev/uinput

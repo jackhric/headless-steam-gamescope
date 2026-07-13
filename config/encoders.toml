@@ -1,23 +1,5 @@
 # steam-stream encoder configuration.
-#
-# This file lives on the HOST and is bind-mounted into the container at /config/encoders.toml
-# (STEAM_STREAM_ENCODER_CONFIG). The server reads it fresh at every stream start, so edits
-# here take effect on the next connection without a rebuild. A future web UI edits this same
-# file. If it's ever deleted, the server re-seeds it from encoder_config::defaults() on start.
-#
-# Placeholders substituted at stream start: {node} {width} {height} {fps} {bitrate}
-#   {vbv_buffer_size} {slices_per_frame} {color_space} {color_range} {payload_size}
-#   {fec_percentage} {min_required_fec_packets}
-# Audio placeholders: {sink_name} {server} {bitrate} {packet_duration}
-#
-# Each encoder is tried in order; the first whose check_elements all instantiate wins.
-# The encoder_pipeline MUST contain `name=video_encoder` (MediaSession::update_bitrate
-# looks the element up by that name to retune bitrate/VBV on resume).
 
-# The [audio] section is optional; missing keys fall back to these compiled-in defaults.
-# The server recreates the pulse null sink named sink_name with the client's negotiated channel
-# count (2/6/8) at each fresh session launch; the pipeline captures {sink_name}.monitor. The
-# opusenc flags are protocol-mandated for Moonlight (CBR, restricted-lowdelay, fullband).
 [audio]
 sink_name = "steam-stream"
 default_source = "pulsesrc device=\"{sink_name}.monitor\" server=\"{server}\" ! audiorate ! audioconvert ! audioresample"
