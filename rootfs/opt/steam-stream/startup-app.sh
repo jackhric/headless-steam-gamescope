@@ -5,6 +5,11 @@ source /opt/gow/bash-lib/utils.sh
 
 gow_log "Steam startup.sh"
 
+# kernel.core_pattern is not namespaced: an in-container segfault pipes to the HOST's
+# systemd-coredump and pops a crash notification on the host desktop. Steam/gamescope
+# crashes are not ours to debug -- suppress their cores entirely.
+ulimit -c 0
+
 # Recursively creating Steam necessary folders (https://github.com/ValveSoftware/steam-for-linux/issues/6492)
 mkdir -p "$HOME/.steam/ubuntu12_32/steam-runtime"
 
@@ -60,6 +65,10 @@ if [ -n "$RUN_GAMESCOPE" ]; then
   export STEAM_GAMESCOPE_DYNAMIC_FPSLIMITER=1
   export GAMESCOPE_LIMITER_FILE=$(mktemp /tmp/gamescope-limiter.XXXXXXXX)
   export STEAM_GAMESCOPE_NIS_SUPPORTED=1
+  # The limiter is enforced by the WSI layer forcing FIFO inside the game; the
+  # layer is implicit but gated on this variable, which gamescope likewise only
+  # exports to its own children.
+  export ENABLE_GAMESCOPE_WSI=1
 
   export XCURSOR_THEME=${XCURSOR_THEME:-Adwaita}
   mkdir -p "$HOME/.config/gtk-3.0"
@@ -124,12 +133,25 @@ if [ -n "$RUN_GAMESCOPE" ]; then
   # Launch mango.
   mangoapp &
 
+  # gamescope's Xwaylands only admit the session user (localuser auth); grant the
+  # root-owned server access so PointerSync can poll the cursor. Retried briefly:
+  # the second Xwayland can come up slightly after the handshake.
+  (
+    for attempt in 1 2 3; do
+      for xs in /tmp/.X11-unix/X*; do
+        [ -S "$xs" ] && DISPLAY=":${xs##*/X}" xhost +si:localuser:root >/dev/null 2>&1
+      done
+      sleep 2
+    done
+  ) &
+
   # Start Steam
   # shellcheck disable=SC2086
   dbus-run-session -- /usr/games/steam ${STEAM_STARTUP_FLAGS}
 
 elif [ -n "$RUN_SWAY" ]; then
-  STEAM_STARTUP_FLAGS=${STEAM_STARTUP_FLAGS:-"-bigpicture"}
+  # Desktop session: plain windowed Steam, no Big Picture.
+  STEAM_STARTUP_FLAGS=${STEAM_STARTUP_FLAGS:-""}
 
   /usr/bin/ibus-daemon -d -r --panel=disable --emoji-extension=disable
 

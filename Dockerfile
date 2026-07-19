@@ -53,8 +53,6 @@ ENV GST_PLUGIN_PATH=/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0 \
     # Encoder config on a dedicated /config mount (bind a host dir here) -- kept OUT of the
     # container/state volume so it's editable on the host and by a future web UI.
     STEAM_STREAM_ENCODER_CONFIG=/config/encoders.toml \
-    # Vendored startup script (Deck-mode Steam flags + --xwayland-count 2) instead of the
-    # base image's /opt/gow/startup-app.sh -- enables Steam's window switcher.
     STEAM_STREAM_LAUNCH_SCRIPT=/opt/steam-stream/startup-app.sh \
     # Add the DRI card + render nodes to GOW's device-group setup so `retro` can open them
     # (cont-init 15-setup_devices -> ensure-groups). Card-node access lets gamescope's XWayland
