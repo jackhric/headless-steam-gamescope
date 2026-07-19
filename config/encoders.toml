@@ -21,34 +21,34 @@ default_sink = "rtpmoonlightpay_video name=moonlight_pay payload_size={payload_s
 [[video.h264_encoders]]
 plugin_name = "nvcodec"
 check_elements = ["nvh264enc", "cudaconvertscale", "cudaupload"]
-encoder_pipeline = "nvh264enc name=video_encoder preset=low-latency-hq zerolatency=true gop-size=0 rc-mode=cbr-ld-hq bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false ! h264parse ! video/x-h264,profile=main,stream-format=byte-stream"
+encoder_pipeline = "nvh264enc name=video_encoder preset=low-latency-hq zerolatency=true gop-size=0 rc-mode=cbr-ld-hq bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false repeat-sequence-header=true ! h264parse config-interval=-1 ! video/x-h264,profile=main,stream-format=byte-stream"
 video_params = "cudaupload ! cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
 video_params_zero_copy = "cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
 
 [[video.h264_encoders]]
 plugin_name = "va"
 check_elements = ["vah264enc", "vapostproc"]
-encoder_pipeline = "vah264enc name=video_encoder aud=false b-frames=0 ref-frames=1 num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 key-int-max=1024 rate-control=cbr target-usage=6 ! h264parse ! video/x-h264,profile=main,stream-format=byte-stream"
+encoder_pipeline = "vah264enc name=video_encoder aud=false b-frames=0 ref-frames=1 num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 key-int-max=1024 rate-control=cbr target-usage=6 ! h264parse config-interval=-1 ! video/x-h264,profile=main,stream-format=byte-stream"
 video_params = "vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1"
 
 [[video.h264_encoders]]
 plugin_name = "x264"
 check_elements = ["x264enc"]
-encoder_pipeline = "x264enc name=video_encoder pass=qual tune=zerolatency speed-preset=superfast b-adapt=false bframes=0 ref=1 sliced-threads=true threads={slices_per_frame} option-string=\"slices={slices_per_frame}:keyint=infinite:open-gop=0\" bitrate={bitrate} aud=false ! video/x-h264,profile=high,stream-format=byte-stream"
+encoder_pipeline = "x264enc name=video_encoder pass=qual tune=zerolatency speed-preset=superfast b-adapt=false bframes=0 ref=1 sliced-threads=true threads={slices_per_frame} option-string=\"slices={slices_per_frame}:keyint=infinite:open-gop=0\" bitrate={bitrate} aud=false ! h264parse config-interval=-1 ! video/x-h264,profile=high,stream-format=byte-stream"
 video_params = "videoconvertscale ! videorate ! video/x-raw,width={width},height={height},framerate={fps}/1,format=I420,chroma-site={color_range},colorimetry={color_space}"
 
 # ---- HEVC ----
 [[video.hevc_encoders]]
 plugin_name = "nvcodec"
 check_elements = ["nvh265enc", "cudaconvertscale", "cudaupload"]
-encoder_pipeline = "nvh265enc name=video_encoder gop-size=-1 bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false rc-mode=cbr zerolatency=true preset=p1 tune=ultra-low-latency multi-pass=two-pass-quarter ! h265parse ! video/x-h265,profile=main,stream-format=byte-stream"
+encoder_pipeline = "nvh265enc name=video_encoder gop-size=-1 bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false rc-mode=cbr zerolatency=true preset=p1 tune=ultra-low-latency multi-pass=two-pass-quarter repeat-sequence-header=true ! h265parse config-interval=-1 ! video/x-h265,profile=main,stream-format=byte-stream"
 video_params = "cudaupload ! cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
 video_params_zero_copy = "cudaconvertscale add-borders=true ! video/x-raw(memory:CUDAMemory),width={width},height={height},chroma-site={color_range},format=NV12,colorimetry={color_space},pixel-aspect-ratio=1/1"
 
 [[video.hevc_encoders]]
 plugin_name = "va"
 check_elements = ["vah265enc", "vapostproc"]
-encoder_pipeline = "vah265enc name=video_encoder aud=false b-frames=0 ref-frames=1 num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 key-int-max=1024 rate-control=cbr target-usage=6 ! h265parse ! video/x-h265,profile=main,stream-format=byte-stream"
+encoder_pipeline = "vah265enc name=video_encoder aud=false b-frames=0 ref-frames=1 num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 key-int-max=1024 rate-control=cbr target-usage=6 ! h265parse config-interval=-1 ! video/x-h265,profile=main,stream-format=byte-stream"
 video_params = "vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1"
 
 # ---- AV1 ----

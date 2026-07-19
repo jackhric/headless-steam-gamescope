@@ -67,12 +67,15 @@ constexpr const char *kSwVideoParams =
     "video/x-raw,width={width},height={height},framerate={fps}/1,format=I420,"
     "chroma-site={color_range},colorimetry={color_space}";
 
+// repeat-sequence-header / config-interval=-1: every IDR must carry VPS/SPS/PPS -- a resumed
+// client starts a fresh decoder mid-stream and can only sync on a self-contained keyframe.
 GstEncoder nv_h264() {
   return {"nvcodec",
           {"nvh264enc", "cudaconvertscale", "cudaupload"},
           "nvh264enc name=video_encoder preset=low-latency-hq zerolatency=true gop-size=0 "
-          "rc-mode=cbr-ld-hq bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false ! "
-          "h264parse ! video/x-h264,profile=main,stream-format=byte-stream",
+          "rc-mode=cbr-ld-hq bitrate={bitrate} vbv-buffer-size={vbv_buffer_size} aud=false "
+          "repeat-sequence-header=true ! "
+          "h264parse config-interval=-1 ! video/x-h264,profile=main,stream-format=byte-stream",
           kNvVideoParams,
           kNvVideoParamsZeroCopy};
 }
@@ -83,7 +86,7 @@ GstEncoder va_h264() {
           "vah264enc name=video_encoder aud=false b-frames=0 ref-frames=1 "
           "num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 "
           "key-int-max=1024 rate-control=cbr target-usage=6 ! "
-          "h264parse ! video/x-h264,profile=main,stream-format=byte-stream",
+          "h264parse config-interval=-1 ! video/x-h264,profile=main,stream-format=byte-stream",
           kVaVideoParams,
           std::nullopt};
 }
@@ -95,7 +98,7 @@ GstEncoder sw_h264() {
           "b-adapt=false bframes=0 ref=1 sliced-threads=true threads={slices_per_frame} "
           "option-string=\"slices={slices_per_frame}:keyint=infinite:open-gop=0\" "
           "bitrate={bitrate} aud=false ! "
-          "video/x-h264,profile=high,stream-format=byte-stream",
+          "h264parse config-interval=-1 ! video/x-h264,profile=high,stream-format=byte-stream",
           kSwVideoParams,
           std::nullopt};
 }
@@ -105,8 +108,8 @@ GstEncoder nv_hevc() {
           {"nvh265enc", "cudaconvertscale", "cudaupload"},
           "nvh265enc name=video_encoder gop-size=-1 bitrate={bitrate} "
           "vbv-buffer-size={vbv_buffer_size} aud=false rc-mode=cbr zerolatency=true preset=p1 "
-          "tune=ultra-low-latency multi-pass=two-pass-quarter ! "
-          "h265parse ! video/x-h265,profile=main,stream-format=byte-stream",
+          "tune=ultra-low-latency multi-pass=two-pass-quarter repeat-sequence-header=true ! "
+          "h265parse config-interval=-1 ! video/x-h265,profile=main,stream-format=byte-stream",
           kNvVideoParams,
           kNvVideoParamsZeroCopy};
 }
@@ -117,7 +120,7 @@ GstEncoder va_hevc() {
           "vah265enc name=video_encoder aud=false b-frames=0 ref-frames=1 "
           "num-slices={slices_per_frame} bitrate={bitrate} cpb-size={vbv_buffer_size} min-qp=20 "
           "key-int-max=1024 rate-control=cbr target-usage=6 ! "
-          "h265parse ! video/x-h265,profile=main,stream-format=byte-stream",
+          "h265parse config-interval=-1 ! video/x-h265,profile=main,stream-format=byte-stream",
           kVaVideoParams,
           std::nullopt};
 }
