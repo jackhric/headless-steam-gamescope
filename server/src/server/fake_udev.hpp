@@ -22,11 +22,18 @@ struct Device {
   std::string syspath; // /devices/... (no /sys prefix), ending in /eventNN
   unsigned int major = 13;
   unsigned int minor = 0;
+  // Drives the ID_INPUT_* classification (joystick|mouse|keyboard). libinput assigns
+  // device capabilities from these udev properties.
+  std::string id_input_class = "joystick";
 };
 
 // Resolve a Device from a uinput fd (after UI_DEV_CREATE) via UI_GET_SYSNAME + stat. Returns false
 // if the sysname/devnode can't be resolved.
 bool device_from_uinput_fd(int fd, Device &out);
+
+// Resolve a Device from an existing /dev/input/eventNN node (a device we did not create,
+// e.g. Steam Input's virtual mouse/keyboard) via /sys/class/input + stat.
+bool device_from_event_node(const std::string &devnode, Device &out);
 
 // Announce (ACTION=add) or withdraw (ACTION=remove) the device to udev/SDL: writes/removes the
 // /run/udev/data hwdb entry and sends the matching netlink uevent. Best-effort; logs on failure.

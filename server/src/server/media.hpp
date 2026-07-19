@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <server/pointer_sync.hpp>
 #include <server/session.hpp>
 #include <server/uinput.hpp>
 #include <string>
@@ -76,6 +77,10 @@ private:
   // controller_number -> virtual pad. Guarded by gamepad_mtx_ (control thread mutates on hotplug).
   std::mutex gamepad_mtx_;
   std::map<int, std::unique_ptr<input::VirtualGamepad>> gamepads_;
+  // Mirrors gamescope's internal cursor (Steam's guide-chord mouse) into the parent
+  // compositor. Reset in stop() BEFORE wayland_src_ is released -- its callback calls
+  // send_wayland_event.
+  std::unique_ptr<input::PointerSync> pointer_sync_;
   // Leaked: detached listener threads outlive the pipeline; kept only to re-target on resume.
   UDPSink *video_sink_ = nullptr;
   UDPSink *audio_sink_ = nullptr;

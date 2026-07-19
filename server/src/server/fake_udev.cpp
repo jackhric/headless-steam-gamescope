@@ -68,18 +68,25 @@ struct MonitorNetlinkHeader {
   unsigned filter_tag_bloom_lo;
 };
 
-// The udev "add"/"remove" event properties. Mirrors Wolf's gen_udev_base_event + the joystick
-// tags SDL keys off of.
+std::vector<std::string> class_props(const Device &dev) {
+  if (dev.id_input_class == "mouse")
+    return {"ID_INPUT_MOUSE"};
+  if (dev.id_input_class == "keyboard")
+    return {"ID_INPUT_KEYBOARD", "ID_INPUT_KEY"};
+  return {"ID_INPUT_JOYSTICK"};
+}
+
+// The udev "add"/"remove" event properties. Mirrors Wolf's gen_udev_base_event + the
+// ID_INPUT_* tags SDL/libinput key off of.
 std::map<std::string, std::string> base_event(const Device &dev, const char *action) {
   auto now = std::chrono::system_clock::now();
   auto ts = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-  return {
+  std::map<std::string, std::string> ev = {
       {"ACTION", action},
       {"SEQNUM", "7"}, // no global seqnum state; udev subscribers don't require monotonicity here
       {"USEC_INITIALIZED", std::to_string(ts)},
       {"SUBSYSTEM", "input"},
       {"ID_INPUT", "1"},
-      {"ID_INPUT_JOYSTICK", "1"},
       {"ID_SERIAL", "noserial"},
       {"TAGS", ":seat:uaccess:"},
       {"CURRENT_TAGS", ":seat:uaccess:"},
@@ -88,6 +95,9 @@ std::map<std::string, std::string> base_event(const Device &dev, const char *act
       {"MAJOR", std::to_string(dev.major)},
       {"MINOR", std::to_string(dev.minor)},
   };
+  for (const auto &p : class_props(dev))
+    ev[p] = "1";
+  return ev;
 }
 
 // udev property payload: NUL-separated KEY=VALUE pairs, trailing NUL.
@@ -168,10 +178,13 @@ void write_hwdb(const Device &dev) {
     logs::log(logs::warning, "[FAKE-UDEV] cannot write hwdb {}: {}", path, std::strerror(errno));
     return;
   }
-  // Matches Wolf's get_udev_hw_db_entries for a joystick. E: exported props, G/Q: tags, V: version.
-  f << "E:ID_INPUT=1\n"
-       "E:ID_INPUT_JOYSTICK=1\n"
-       "E:ID_BUS=usb\n"
+  // Matches Wolf's get_udev_hw_db_entries. E: exported props, G/Q: tags, V: version.
+  // The mere existence of this file also makes udev_device_get_is_initialized() true,
+  // which libinput requires before it will accept a path-added device.
+  f << "E:ID_INPUT=1\n";
+  for (const auto &p : class_props(dev))
+    f << "E:" << p << "=1\n";
+  f << "E:ID_BUS=usb\n"
        "G:seat\n"
        "G:uaccess\n"
        "Q:seat\n"
@@ -232,6 +245,30 @@ bool device_from_uinput_fd(int fd, Device &out) {
     logs::log(logs::warning, "[FAKE-UDEV] stat {} failed: {}", out.devnode, std::strerror(errno));
     return false;
   }
+  return true;
+}
+
+bool device_from_event_node(const std::string &devnode, Device &out) {
+  auto event_name = std::filesystem::path(devnode).filename().string(); // eventNN
+  std::error_code ec;
+  auto sys = std::filesystem::canonical("/sys/class/input/" + event_name, ec);
+  if (ec) {
+    logs::log(logs::warning, "[FAKE-UDEV] cannot resolve sysfs path for {}: {}", devnode,
+              ec.message());
+    return false;
+  }
+  out.syspath = sys.string();
+  if (out.syspath.rfind("/sys", 0) == 0)
+    out.syspath = out.syspath.substr(4);
+  out.devnode = devnode;
+
+  struct stat st{};
+  if (::stat(devnode.c_str(), &st) != 0) {
+    logs::log(logs::warning, "[FAKE-UDEV] stat {} failed: {}", devnode, std::strerror(errno));
+    return false;
+  }
+  out.major = major(st.st_rdev);
+  out.minor = minor(st.st_rdev);
   return true;
 }
 

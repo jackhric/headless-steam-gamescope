@@ -5,7 +5,9 @@
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <fmt/format.h>
+#include <fstream>
 #include <gst/app/gstappsink.h>
 #include <gst/gst.h>
 #include <helpers/logger.hpp>
@@ -16,10 +18,33 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 namespace media {
 
 namespace {
+
+std::vector<pid_t> group_pids(pid_t pgid) {
+  std::vector<pid_t> out;
+  DIR *d = ::opendir("/proc");
+  if (!d)
+    return out;
+  while (dirent *e = ::readdir(d)) {
+    char *end = nullptr;
+    long pid = std::strtol(e->d_name, &end, 10);
+    if (end && *end == '\0' && pid > 0 && ::getpgid(static_cast<pid_t>(pid)) == pgid)
+      out.push_back(static_cast<pid_t>(pid));
+  }
+  ::closedir(d);
+  return out;
+}
+
+std::string proc_comm(pid_t pid) {
+  std::ifstream f(fmt::format("/proc/{}/comm", pid));
+  std::string comm;
+  std::getline(f, comm);
+  return comm;
+}
 
 std::string color_range_str(session::ColorRange r) {
   return r == session::ColorRange::JPEG ? "jpeg" : "mpeg2";
@@ -452,6 +477,18 @@ std::shared_ptr<MediaSession> MediaSession::start(const std::shared_ptr<session:
     if (!ms->wayland_src_)
       logs::log(logs::warning, "[MEDIA] wolf_wayland_source not found -- input injection disabled");
     watch_wayland_and_launch(ms->video_pipeline_, s, ms->app_pid_, pulse_sink);
+    if (ms->wayland_src_) {
+      const char *ps = std::getenv("STEAM_STREAM_POINTER_SYNC");
+      if (!ps || (std::string(ps) != "0" && std::string(ps) != "false")) {
+        auto *raw = ms.get(); // safe: pointer_sync_ is reset before wayland_src_ in stop()
+        // Deliberately not routed through mouse_move_abs(): that path marks client activity.
+        ms->pointer_sync_ = std::make_unique<input::PointerSync>([raw](double x, double y) {
+          raw->send_wayland_event(gst_structure_new("MouseMoveAbsolute", "pointer_x",
+                                                    G_TYPE_DOUBLE, x, "pointer_y", G_TYPE_DOUBLE,
+                                                    y, NULL));
+        });
+      }
+    }
   }
 
   // Audio
@@ -481,11 +518,15 @@ void MediaSession::send_wayland_event(GstStructure *msg) {
 }
 
 void MediaSession::mouse_move_rel(double dx, double dy) {
+  if (pointer_sync_)
+    pointer_sync_->note_client_mouse();
   send_wayland_event(gst_structure_new("MouseMoveRelative", "pointer_x", G_TYPE_DOUBLE, dx,
                                        "pointer_y", G_TYPE_DOUBLE, dy, NULL));
 }
 
 void MediaSession::mouse_move_abs(double x, double y) {
+  if (pointer_sync_)
+    pointer_sync_->note_client_mouse();
   send_wayland_event(gst_structure_new("MouseMoveAbsolute", "pointer_x", G_TYPE_DOUBLE, x,
                                        "pointer_y", G_TYPE_DOUBLE, y, NULL));
 }
@@ -550,11 +591,15 @@ void MediaSession::gamepad_update(int controller_number, std::uint16_t active_ga
 void MediaSession::force_idr() {
   if (video_pipeline_) {
     logs::log(logs::debug, "[MEDIA] force_idr (GstForceKeyUnit) on video pipeline");
+    // All three fields are required for gst_video_event_parse_upstream_force_key_unit; a
+    // partial structure can be silently ignored by the encoder.
     gst_element_send_event(
         video_pipeline_,
         gst_event_new_custom(GST_EVENT_CUSTOM_UPSTREAM,
-                             gst_structure_new("GstForceKeyUnit", "all-headers", G_TYPE_BOOLEAN,
-                                               TRUE, NULL)));
+                             gst_structure_new("GstForceKeyUnit", "running-time",
+                                               GST_TYPE_CLOCK_TIME, GST_CLOCK_TIME_NONE,
+                                               "all-headers", G_TYPE_BOOLEAN, TRUE, "count",
+                                               G_TYPE_UINT, 0u, NULL)));
   }
 }
 
@@ -631,6 +676,38 @@ void MediaSession::stop() {
   // the app's process group is gone -- else the next session hits "Address already in use".
   if (pid_t pid = app_pid_->exchange(-1); pid > 0) {
     logs::log(logs::info, "[MEDIA] stopping launched app (pgid {})", pid);
+
+    // Group-wide SIGTERM races gamescope's exit against Steam's slower shutdown: the Xwaylands
+    // vanish under steamwebhelper and it segfaults -- and core_pattern isn't namespaced, so the
+    // dumps land on the HOST's systemd-coredump/DrKonqi. Shut the Steam client down first, alone,
+    // and only sweep the rest of the group once it's gone.
+    std::vector<pid_t> steam;
+    for (pid_t p : group_pids(pid))
+      if (proc_comm(p) == "steam")
+        steam.push_back(p);
+    if (!steam.empty()) {
+      for (pid_t p : steam)
+        ::kill(p, SIGTERM);
+      logs::log(logs::info, "[MEDIA] SIGTERM to steam client (pid {}); waiting for clean exit",
+                steam.front());
+      bool clean = false;
+      for (int i = 0; i < 150; i++) { // ~15s; Steam syncs cloud saves on the way out
+        clean = true;
+        for (pid_t p : group_pids(pid)) {
+          std::string c = proc_comm(p);
+          if (c == "steam" || c == "steamwebhelper") {
+            clean = false;
+            break;
+          }
+        }
+        if (clean)
+          break;
+        ::usleep(100 * 1000);
+      }
+      logs::log(clean ? logs::info : logs::warning, "[MEDIA] steam client {}",
+                clean ? "exited cleanly" : "still alive after 15s -- falling back to group kill");
+    }
+
     ::kill(-pid, SIGTERM);
     auto group_alive = [pid]() { return ::kill(-pid, 0) == 0 || errno != ESRCH; };
     bool dead = false;
@@ -654,6 +731,7 @@ void MediaSession::stop() {
     std::lock_guard<std::mutex> lk(gamepad_mtx_);
     gamepads_.clear();
   }
+  pointer_sync_.reset(); // joins its thread; must precede wayland_src_ release
   if (wayland_src_) {
     gst_object_unref(wayland_src_);
     wayland_src_ = nullptr;

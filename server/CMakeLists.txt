@@ -123,6 +123,7 @@ if(BUILD_SERVER)
             ${SRC}/server/control.cpp
             ${SRC}/server/uinput.cpp
             ${SRC}/server/fake_udev.cpp
+            ${SRC}/server/pointer_sync.cpp
             ${SERVER_PROTO})
 
     target_include_directories(steam-stream-server PRIVATE
@@ -138,6 +139,7 @@ if(BUILD_SERVER)
     target_link_libraries(steam-stream-server PRIVATE
             wolf_crypto
             enet
+            xcb
             PkgConfig::GST PkgConfig::GSTAPP
             OpenSSL::SSL OpenSSL::Crypto
             Boost::log Boost::log_setup Boost::thread Boost::system
