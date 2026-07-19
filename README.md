@@ -2,9 +2,13 @@
   <img src="assets/header.png" alt="Steam Headless" width="100%">
 </p>
 
-# Steam Headless (Gamescope session)
+# SteamOS™ Containerized
 
-This repo allows you to run Steam as a headless Docker container, with emphasis on the Gamescope session that is utilized by the Steam Deck and Steam Machine. Tested on Arch with NVIDIA.
+This repo allows you to run Steam as a headless Docker container, with emphasis on the Gamescope session that is utilized by the Steam Deck and Steam Machine.
+
+## Quick Start
+
+
 
 ## Use case
 Very useful as a Docker container. Since the primary use case is for Gamescope sessions, you no longer have to finangle with game windows or similar to get up and running. Everything just (mostly) works! Prioritizes couch-potato gameplay!
